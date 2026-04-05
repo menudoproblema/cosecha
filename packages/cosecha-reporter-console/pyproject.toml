@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha-reporter-console"
+dynamic = ["version"]
+description = "Cosecha Console Reporter"
+requires-python = ">=3.13"
+dependencies = [
+    "cosecha-core",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
+[project.entry-points."cosecha.shell.reporting"]
+console = "cosecha.reporter.console:ConsoleReporter"
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha.reporter.console._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
