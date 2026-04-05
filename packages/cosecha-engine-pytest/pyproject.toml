@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha-engine-pytest"
+dynamic = ["version"]
+description = "Cosecha Pytest Engine"
+requires-python = ">=3.13"
+dependencies = [
+    "cosecha-core",
+    "pytest==9.0.2",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
+[project.entry-points."cosecha.engines"]
+pytest = "cosecha.engine.pytest.discovery:PytestEngineDescriptor"
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha.engine.pytest._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
