@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha-core"
+dynamic = ["version"]
+description = "Cosecha Agnostics Core"
+requires-python = ">=3.13"
+dependencies = [
+    "cxp==1.0.0",
+    "msgspec==0.20.0",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha.core._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true

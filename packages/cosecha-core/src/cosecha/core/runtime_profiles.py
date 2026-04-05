@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib import import_module
 from typing import TYPE_CHECKING, Literal, cast
 
-from cosecha.core import resources as core_resources
 from cosecha.core.runtime_interop import (
     build_runtime_canonical_binding_name,
     validate_runtime_capability_matrix,
@@ -25,6 +25,22 @@ type ServiceReadinessStatus = Literal[
     'unhealthy',
     'unhealthy_local',
 ]
+
+
+def _build_runtime_shadow_requirement(
+    service: RuntimeServiceSpec,
+) -> ResourceRequirement:
+    resources_module = import_module('cosecha.core.resources')
+    return resources_module.ResourceRequirement(
+        name=service.interface,
+        provider=resources_module.CallableResourceProvider(lambda: None),
+        scope=cast('str', service.scope),
+        mode='live',
+        depends_on=service.depends_on,
+        initializes_from=service.initializes_from,
+        initialization_mode=cast('str', service.initialization_mode),
+        readiness_policy=service.readiness_policy,
+    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -179,16 +195,7 @@ class RuntimeServiceSpec:
         return from_builtins_dict(data, target_type=cls)
 
     def build_shadow_requirement(self) -> ResourceRequirement:
-        return core_resources.ResourceRequirement(
-            name=self.interface,
-            provider=core_resources.CallableResourceProvider(lambda: None),
-            scope=cast('str', self.scope),
-            mode='live',
-            depends_on=self.depends_on,
-            initializes_from=self.initializes_from,
-            initialization_mode=cast('str', self.initialization_mode),
-            readiness_policy=self.readiness_policy,
-        )
+        return _build_runtime_shadow_requirement(self)
 
 
 @dataclass(slots=True, frozen=True)

@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
+from pathlib import Path
+
 import pytest
 
 from cosecha.core.manifest_symbols import ManifestValidationError
@@ -10,6 +16,7 @@ from cosecha.core.runtime_profiles import (
     RuntimeModeDisallowance,
     RuntimeModeRequirement,
     RuntimeProfileSpec,
+    RuntimeReadinessPolicy,
     RuntimeRequirementSet,
     RuntimeServiceOffering,
     RuntimeServiceSpec,
@@ -188,6 +195,45 @@ def test_build_runtime_service_shadow_requirements_preserves_declared_graph(
     assert requirement.depends_on == ('database/mongodb',)
     assert requirement.initializes_from == ('transport/http',)
     assert requirement.initialization_mode == 'state_snapshot'
+
+
+def test_build_runtime_service_shadow_requirements_preserves_readiness_policy(
+) -> None:
+    readiness_policy = RuntimeReadinessPolicy(
+        initial_delay_seconds=2.5,
+        max_wait_seconds=15.0,
+    )
+    profile = RuntimeProfileSpec(
+        id='web',
+        services=(
+            RuntimeServiceSpec(
+                interface='execution/engine',
+                provider='demo',
+                readiness_policy=readiness_policy,
+            ),
+        ),
+    )
+
+    requirement = build_runtime_service_shadow_requirements(profile)[0]
+
+    assert requirement.readiness_policy == readiness_policy
+
+
+def test_cold_import_of_items_succeeds() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    env = os.environ.copy()
+    env['PYTHONPATH'] = str(repo_root / 'packages' / 'cosecha-core' / 'src')
+
+    result = subprocess.run(
+        [sys.executable, '-c', 'import cosecha.core.items'],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_runtime_profile_service_graph_reuses_initializer_scope_invariants(
