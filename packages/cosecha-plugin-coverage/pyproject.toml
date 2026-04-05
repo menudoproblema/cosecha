@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha-plugin-coverage"
+dynamic = ["version"]
+description = "Cosecha Coverage Plugin"
+requires-python = ">=3.13"
+dependencies = [
+    "cosecha-core",
+    "coverage==7.13.3",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
+[project.entry-points."cosecha.plugins"]
+coverage = "cosecha.plugin.coverage:CoveragePlugin"
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha.plugin.coverage._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
