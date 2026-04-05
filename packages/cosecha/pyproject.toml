@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha"
+dynamic = ["version"]
+description = "Cosecha: Agnostic Testing Orchestrator"
+requires-python = ">=3.13"
+dependencies = [
+    "cosecha-core",
+    "cosecha-engine-pytest",
+    "cosecha-reporter-console",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
+[project.optional-dependencies]
+gherkin = [
+    "cosecha-engine-gherkin",
+]
+json = [
+    "cosecha-reporter-json",
+]
+junit = [
+    "cosecha-reporter-junit",
+]
+mongo = [
+    "cosecha-resource-mongo",
+]
+coverage = [
+    "cosecha-plugin-coverage",
+]
+timing = [
+    "cosecha-plugin-timing",
+]
+lsp = [
+    "cosecha-lsp",
+]
+mcp = [
+    "cosecha-mcp",
+]
+all = [
+    "cosecha-engine-gherkin",
+    "cosecha-reporter-json",
+    "cosecha-reporter-junit",
+    "cosecha-resource-mongo",
+    "cosecha-plugin-coverage",
+    "cosecha-plugin-timing",
+]
+devtools = [
+    "cosecha-lsp",
+    "cosecha-mcp",
+]
+full = [
+    "cosecha-engine-gherkin",
+    "cosecha-reporter-json",
+    "cosecha-reporter-junit",
+    "cosecha-resource-mongo",
+    "cosecha-plugin-coverage",
+    "cosecha-plugin-timing",
+    "cosecha-lsp",
+    "cosecha-mcp",
+]
+
+[project.entry-points."cosecha.hooks"]
+mochuelo_runtime_service = "cosecha.shell.mochuelo_runtime:MochueloRuntimeServiceHookDescriptor"
+
+[project.scripts]
+cosecha = "cosecha.shell.runner_cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
+
+[tool.ruff.lint.per-file-ignores]
+"src/cosecha/shell/runner_cli.py" = ["PLC0415", "T201"]
