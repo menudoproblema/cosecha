@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha-reporter-json"
+dynamic = ["version"]
+description = "Cosecha JSON Reporter"
+requires-python = ">=3.13"
+dependencies = [
+    "cosecha-core",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
+[project.entry-points."cosecha.shell.reporting"]
+json = "cosecha.reporter.json:JsonReporter"
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha.reporter.json._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
