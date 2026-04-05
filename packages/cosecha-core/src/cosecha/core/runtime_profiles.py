@@ -509,6 +509,7 @@ def _resolve_runtime_capability_requirement_issue(
     capability_requirement: RuntimeCapabilityRequirement,
     offerings_by_interface: dict[str, RuntimeServiceOffering],
 ) -> str | None:
+    error_message: str | None = None
     interface_error = validate_runtime_interface_name(
         capability_requirement.interface_name,
     )
@@ -519,53 +520,66 @@ def _resolve_runtime_capability_requirement_issue(
         capability_requirement.interface_name,
     )
     if offering is None:
-        return (
+        error_message = (
             'Missing runtime interface '
             f'{capability_requirement.interface_name!r} required by '
             f'capability {capability_requirement.capability_name!r}'
         )
-
-    if offering.readiness_state in {'unhealthy', 'unhealthy_local'}:
-        return (
+    elif offering.readiness_state in {'unhealthy', 'unhealthy_local'}:
+        error_message = (
             'Runtime interface '
             f'{capability_requirement.interface_name!r} is '
             f'{offering.readiness_state} and cannot satisfy capability '
             f'{capability_requirement.capability_name!r}'
         )
+    else:
+        try:
+            validation = validate_runtime_capability_matrix(
+                capability_requirement.interface_name,
+                (capability_requirement.capability_name,),
+            )
+        except ValueError as error:
+            error_message = (
+                'Capability discovery error for runtime interface '
+                f'{capability_requirement.interface_name!r}: '
+                f'{error}'
+            )
+        else:
+            unknown_capabilities = (
+                () if validation is None else validation.unknown_capabilities
+            )
+            if (
+                capability_requirement.capability_name
+                not in offering.capabilities
+                and capability_requirement.capability_name
+                not in offering.degraded_capabilities
+                and unknown_capabilities
+            ):
+                validation_message = (
+                    'unknown capability '
+                    f'{capability_requirement.capability_name!r}'
+                    if validation is None
+                    else '; '.join(validation.messages())
+                )
+                error_message = (
+                    'Capability discovery error for runtime interface '
+                    f'{capability_requirement.interface_name!r}: '
+                    f'{validation_message}'
+                )
+            else:
+                available_capabilities = offering.capabilities
+                if offering.readiness_state == 'degraded':
+                    available_capabilities = offering.degraded_capabilities
 
-    validation = validate_runtime_capability_matrix(
-        capability_requirement.interface_name,
-        (capability_requirement.capability_name,),
-    )
-    unknown_capabilities = (
-        () if validation is None else validation.unknown_capabilities
-    )
-    if (
-        capability_requirement.capability_name not in offering.capabilities
-        and capability_requirement.capability_name
-        not in offering.degraded_capabilities
-        and unknown_capabilities
-    ):
-        validation_message = (
-            f'unknown capability {capability_requirement.capability_name!r}'
-            if validation is None
-            else '; '.join(validation.messages())
-        )
-        return (
-            'Capability discovery error for runtime interface '
-            f'{capability_requirement.interface_name!r}: '
-            f'{validation_message}'
-        )
+                if (
+                    capability_requirement.capability_name
+                    not in available_capabilities
+                ):
+                    error_message = (
+                        'Missing runtime capability '
+                        f'{capability_requirement.interface_name!r}:'
+                        f'{capability_requirement.capability_name!r} '
+                        'in active profile'
+                    )
 
-    available_capabilities = offering.capabilities
-    if offering.readiness_state == 'degraded':
-        available_capabilities = offering.degraded_capabilities
-
-    if capability_requirement.capability_name in available_capabilities:
-        return None
-
-    return (
-        'Missing runtime capability '
-        f'{capability_requirement.interface_name!r}:'
-        f'{capability_requirement.capability_name!r} in active profile'
-    )
+    return error_message

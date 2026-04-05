@@ -78,6 +78,12 @@ El core mantiene ownership sobre materialización, scheduling y runtime,
 pero el vocabulario público de interfaces y capabilities se valida
 contra la capa de catálogos interoperables del framework actual.
 
+Cuando un catálogo interoperable publica una familia abstracta y una
+interfaz concreta asociada, los servicios declarados deben preferir la
+interfaz concreta para superficies de capabilities. En el caso actual de
+engines de ejecución, `execution/plan-run` es la interfaz concreta y
+`execution/engine` se mantiene como alias de compatibilidad de familia.
+
 ## Persistencia de artefactos
 
 La sesión persiste una versión compacta de:

@@ -12,6 +12,7 @@ from cosecha.core.manifest_symbols import ManifestValidationError
 from cosecha.core.manifest_validation import (
     validate_runtime_profile_service_graph,
 )
+from cosecha.core.runtime_interop import validate_runtime_interface_name
 from cosecha.core.runtime_profiles import (
     RuntimeModeDisallowance,
     RuntimeModeRequirement,
@@ -219,6 +220,22 @@ def test_build_runtime_service_shadow_requirements_preserves_readiness_policy(
     assert requirement.readiness_policy == readiness_policy
 
 
+def test_runtime_profile_service_capabilities_validate_via_execution_family(
+) -> None:
+    profile = RuntimeProfileSpec(
+        id='web',
+        services=(
+            RuntimeServiceSpec(
+                interface='execution/engine',
+                provider='demo',
+                capabilities=('run',),
+            ),
+        ),
+    )
+
+    validate_runtime_profile_service_graph(profile)
+
+
 def test_cold_import_of_items_succeeds() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     env = os.environ.copy()
@@ -292,6 +309,31 @@ def test_runtime_profile_service_graph_detects_mixed_dependency_cycle() -> (
             r"Runtime profile 'web' declares invalid service graph: "
             r"Cyclic runtime service dependency detected at "
             r"'execution/engine'"
+        ),
+    ):
+        validate_runtime_profile_service_graph(profile)
+
+
+def test_runtime_profile_service_rejects_legacy_plan_run_capability() -> None:
+    if validate_runtime_interface_name('execution/plan-run') is not None:
+        pytest.skip('Installed cxp does not expose execution/plan-run yet')
+
+    profile = RuntimeProfileSpec(
+        id='web',
+        services=(
+            RuntimeServiceSpec(
+                interface='execution/plan-run',
+                provider='demo',
+                capabilities=('draft_validation',),
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        ManifestValidationError,
+        match=(
+            r"Runtime profile 'web' declares invalid capabilities for "
+            r"'execution/plan-run': Unknown capabilities: draft_validation"
         ),
     ):
         validate_runtime_profile_service_graph(profile)

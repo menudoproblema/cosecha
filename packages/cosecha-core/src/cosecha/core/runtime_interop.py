@@ -5,7 +5,7 @@ import re
 from typing import TYPE_CHECKING
 
 from cxp.capabilities import Capability, CapabilityMatrix
-from cxp.catalogs.base import get_catalog
+from cxp.catalogs import base as cxp_catalogs_base
 from cxp.catalogs.interfaces.application import (  # noqa: F401
     HTTP_APPLICATION_CATALOG,
 )
@@ -27,6 +27,20 @@ RUNTIME_INTERFACE_PREFIXES = (
     'database/',
     'execution/',
     'transport/',
+)
+RUNTIME_CONCRETE_INTERFACE_ALIASES = {
+    'execution/engine': 'execution/plan-run',
+}
+DEFAULT_CATALOG_REGISTRY = getattr(
+    cxp_catalogs_base,
+    'DEFAULT_CATALOG_REGISTRY',
+    None,
+)
+get_catalog = cxp_catalogs_base.get_catalog
+_catalog_satisfies_interface = getattr(
+    cxp_catalogs_base,
+    'catalog_satisfies_interface',
+    None,
 )
 
 
@@ -50,11 +64,78 @@ def validate_runtime_interface_name(interface_name: str) -> str | None:
     )
 
 
+def _iter_registered_catalog_interfaces() -> tuple[str, ...]:
+    if DEFAULT_CATALOG_REGISTRY is None:
+        return ()
+
+    interface_names = getattr(
+        DEFAULT_CATALOG_REGISTRY,
+        'interface_names',
+        None,
+    )
+    if callable(interface_names):
+        return tuple(interface_names())
+
+    catalogs = getattr(DEFAULT_CATALOG_REGISTRY, '_catalogs', None)
+    if isinstance(catalogs, dict):
+        return tuple(sorted(catalogs))
+    return ()
+
+
+def _catalog_satisfies_runtime_interface(
+    offered_interface_name: str,
+    required_interface_name: str,
+) -> bool:
+    if _catalog_satisfies_interface is None:
+        return offered_interface_name == required_interface_name
+    return _catalog_satisfies_interface(
+        offered_interface_name,
+        required_interface_name,
+    )
+
+
+def _resolve_runtime_validation_catalog(interface_name: str):
+    catalog = get_catalog(interface_name)
+    if catalog is None or not getattr(catalog, 'abstract', False):
+        return catalog
+
+    concrete_interface_name = RUNTIME_CONCRETE_INTERFACE_ALIASES.get(
+        interface_name,
+    )
+    if concrete_interface_name is not None:
+        concrete_catalog = get_catalog(concrete_interface_name)
+        if (
+            concrete_catalog is not None
+            and not getattr(concrete_catalog, 'abstract', False)
+            and _catalog_satisfies_runtime_interface(
+                concrete_interface_name,
+                interface_name,
+            )
+        ):
+            return concrete_catalog
+
+    concrete_catalogs = tuple(
+        candidate_catalog
+        for candidate_interface_name in _iter_registered_catalog_interfaces()
+        if candidate_interface_name != interface_name
+        for candidate_catalog in (get_catalog(candidate_interface_name),)
+        if candidate_catalog is not None
+        and not getattr(candidate_catalog, 'abstract', False)
+        and _catalog_satisfies_runtime_interface(
+            candidate_interface_name,
+            interface_name,
+        )
+    )
+    if len(concrete_catalogs) == 1:
+        return concrete_catalogs[0]
+    return catalog
+
+
 def validate_runtime_capability_matrix(
     interface_name: str,
     capability_names: Iterable[str],
 ):
-    catalog = get_catalog(interface_name)
+    catalog = _resolve_runtime_validation_catalog(interface_name)
     if catalog is None:
         return None
 
@@ -64,23 +145,37 @@ def validate_runtime_capability_matrix(
             for capability_name in capability_names
         ),
     )
-    return catalog.validate_capability_matrix(matrix)
+    try:
+        return catalog.validate_capability_matrix(matrix)
+    except ValueError as error:
+        if getattr(catalog, 'abstract', False):
+            msg = (
+                f'Runtime interface {interface_name!r} resolves to an '
+                'abstract '
+                'catalog and cannot validate capability surfaces'
+            )
+            raise ValueError(msg) from error
+        raise
 
 
 def build_runtime_capability_validation_messages(
     interface_name: str,
     capability_names: Iterable[str],
 ) -> tuple[str, ...]:
-    validation = validate_runtime_capability_matrix(
-        interface_name,
-        capability_names,
-    )
+    try:
+        validation = validate_runtime_capability_matrix(
+            interface_name,
+            capability_names,
+        )
+    except ValueError as error:
+        return (str(error),)
     if validation is None or validation.is_valid():
         return ()
     return tuple(validation.messages())
 
 
 __all__ = (
+    'RUNTIME_CONCRETE_INTERFACE_ALIASES',
     'RUNTIME_INTERFACE_PREFIXES',
     'build_runtime_canonical_binding_name',
     'build_runtime_capability_validation_messages',
