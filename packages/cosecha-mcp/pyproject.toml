@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha-mcp"
+dynamic = ["version"]
+description = "MCP server for exploring and operating Cosecha workspaces"
+requires-python = ">=3.13"
+dependencies = [
+    "cosecha-core",
+    "mcp==1.27.0",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
+[project.scripts]
+cosecha-mcp = "cosecha_mcp.server:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha_mcp._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
+[tool.ruff.lint.per-file-ignores]
+"src/cosecha_mcp/server.py" = ["FBT001", "FBT002", "PLR0913"]
+"src/cosecha_mcp/service.py" = ["PLR0913", "S603"]
+"tests/test_service.py" = ["PLR2004", "S108"]
+"tests/test_workspace.py" = ["E402", "S108"]
