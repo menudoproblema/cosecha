@@ -1,0 +1,150 @@
+[tool.uv.workspace]
+members = [
+    "packages/cosecha",
+    "packages/cosecha-core",
+    "packages/cosecha-mcp",
+    "packages/cosecha-lsp",
+    "packages/cosecha-engine-gherkin",
+    "packages/cosecha-engine-pytest",
+    "packages/cosecha-resource-mongo",
+    "packages/cosecha-plugin-coverage",
+    "packages/cosecha-plugin-timing",
+    "packages/cosecha-reporter-console",
+    "packages/cosecha-reporter-json",
+    "packages/cosecha-reporter-junit",
+]
+
+[tool.uv.sources]
+cosecha = { workspace = true }
+cosecha-core = { workspace = true }
+cosecha-mcp = { workspace = true }
+cosecha-lsp = { workspace = true }
+cosecha-engine-gherkin = { workspace = true }
+cosecha-engine-pytest = { workspace = true }
+cosecha-resource-mongo = { workspace = true }
+cosecha-plugin-coverage = { workspace = true }
+cosecha-plugin-timing = { workspace = true }
+cosecha-reporter-console = { workspace = true }
+cosecha-reporter-json = { workspace = true }
+cosecha-reporter-junit = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+]
+
+[tool.ruff]
+exclude = [
+    ".cosecha",
+    ".env",
+    ".git",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".vscode",
+    "build",
+    "dist",
+    "site-packages",
+    "env",
+]
+respect-gitignore = true
+line-length = 79
+indent-width = 4
+target-version = "py313"
+src = [
+    "packages/cosecha/src",
+    "packages/cosecha/tests",
+    "packages/cosecha-core/src",
+    "packages/cosecha-core/tests",
+    "packages/cosecha-mcp/src",
+    "packages/cosecha-mcp/tests",
+    "packages/cosecha-lsp/src",
+    "packages/cosecha-engine-gherkin/src",
+    "packages/cosecha-engine-pytest/src",
+    "packages/cosecha-resource-mongo/src",
+    "packages/cosecha-plugin-coverage/src",
+    "packages/cosecha-plugin-timing/src",
+    "packages/cosecha-reporter-console/src",
+    "packages/cosecha-reporter-json/src",
+    "packages/cosecha-reporter-junit/src",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "D",
+    "F",
+    "I",
+    "N",
+    "PL",
+    "UP",
+    "A",
+    "ASYNC",
+    "S",
+    "FBT",
+    "B",
+    "COM",
+    "C4",
+    "DTZ",
+    "T10",
+    "EM",
+    "FA",
+    "ISC",
+    "ICN",
+    "PIE",
+    "T20",
+    "PYI",
+    "PT",
+    "RSE",
+    "RET",
+    "SLOT",
+    "SIM",
+    "TC",
+    "INT",
+    "PTH",
+    "PERF",
+    "FURB",
+    "RUF",
+]
+ignore = [
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D107",
+]
+fixable = ["ALL"]
+unfixable = []
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/*" = ["S101"]
+"**/docs/*" = ["E501"]
+
+[tool.ruff.lint.flake8-pytest-style]
+parametrize-names-type = "list"
+parametrize-values-row-type = "tuple"
+parametrize-values-type = "list"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+ignore-decorators = ["typing.overload"]
+
+[tool.ruff.lint.isort]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+combine-as-imports = true
+lines-between-types = 1
+lines-after-imports = 2
+force-sort-within-sections = false
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = false
+docstring-code-line-length = "dynamic"
