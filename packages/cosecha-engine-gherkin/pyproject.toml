@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha-engine-gherkin"
+dynamic = ["version"]
+description = "Cosecha Gherkin Engine"
+requires-python = ">=3.13"
+dependencies = [
+    "cosecha-core",
+    "gherkin-official==38.0.0",
+    "parse==1.21.0",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
+[project.entry-points."cosecha.engines"]
+gherkin = "cosecha.engine.gherkin.discovery:GherkinEngineDescriptor"
+
+[project.entry-points."cosecha.shell.lsp"]
+gherkin = "cosecha.engine.gherkin.discovery:GherkinLspContribution"
+
+[project.entry-points."cosecha.knowledge.query"]
+gherkin = "cosecha.engine.gherkin.discovery:GherkinDefinitionKnowledgeQueryProvider"
+
+[project.entry-points."cosecha.console.presenters"]
+gherkin = "cosecha.engine.gherkin.discovery:GherkinConsolePresenter"
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha.engine.gherkin._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
