@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Callable
 
 from cosecha.core.config import Config
 from cosecha.core.instrumentation import (
@@ -20,6 +23,9 @@ from cosecha.core.knowledge_base import (
     PersistentKnowledgeBase,
     SessionArtifactQuery,
 )
+
+_SESSION_ARTIFACT_RETRY_ATTEMPTS = 3
+_SESSION_ARTIFACT_RETRY_DELAY_SECONDS = 0.05
 
 
 def _strip_coverage_options(argv: list[str]) -> list[str]:
@@ -67,6 +73,10 @@ def _load_metadata(metadata_path: Path) -> dict[str, object] | None:
     return json.loads(metadata_path.read_text(encoding='utf-8'))
 
 
+def _open_knowledge_base(db_path: Path) -> PersistentKnowledgeBase:
+    return PersistentKnowledgeBase(db_path)
+
+
 def _update_session_artifact(
     metadata: dict[str, object],
     *,
@@ -80,35 +90,51 @@ def _update_session_artifact(
     ):
         return (None, 'session metadata is incomplete')
 
-    knowledge_base = PersistentKnowledgeBase(Path(knowledge_base_path))
-    try:
-        artifacts = knowledge_base.query_session_artifacts(
-            SessionArtifactQuery(session_id=session_id, limit=1),
-        )
-        if not artifacts:
-            return (None, f'session artifact not found for {session_id}')
-        artifact = artifacts[0]
-        report_summary = artifact.report_summary
-        if report_summary is None:
+    db_path = Path(knowledge_base_path)
+    for attempt in range(_SESSION_ARTIFACT_RETRY_ATTEMPTS):
+        knowledge_base = None
+        try:
+            knowledge_base = _open_knowledge_base(db_path)
+            artifacts = knowledge_base.query_session_artifacts(
+                SessionArtifactQuery(session_id=session_id, limit=1),
+            )
+            if not artifacts:
+                if attempt + 1 < _SESSION_ARTIFACT_RETRY_ATTEMPTS:
+                    time.sleep(_SESSION_ARTIFACT_RETRY_DELAY_SECONDS)
+                    continue
+                return (None, f'session artifact not found for {session_id}')
+            artifact = artifacts[0]
+            report_summary = artifact.report_summary
+            if report_summary is None:
+                return (
+                    None,
+                    f'session artifact {session_id} has no report summary',
+                )
+            updated_report_summary = replace(
+                report_summary,
+                instrumentation_summaries={
+                    **report_summary.instrumentation_summaries,
+                    summary.instrumentation_name: summary,
+                },
+            )
+            updated_artifact = replace(
+                artifact,
+                report_summary=updated_report_summary,
+            )
+            knowledge_base.store_session_artifact(updated_artifact)
+            return (updated_artifact, None)
+        except sqlite3.OperationalError as error:
+            if attempt + 1 < _SESSION_ARTIFACT_RETRY_ATTEMPTS:
+                time.sleep(_SESSION_ARTIFACT_RETRY_DELAY_SECONDS)
+                continue
             return (
                 None,
-                f'session artifact {session_id} has no report summary',
+                'failed to reopen knowledge base for coverage persistence '
+                f'({error})',
             )
-        updated_report_summary = replace(
-            report_summary,
-            instrumentation_summaries={
-                **report_summary.instrumentation_summaries,
-                summary.instrumentation_name: summary,
-            },
-        )
-        updated_artifact = replace(
-            artifact,
-            report_summary=updated_report_summary,
-        )
-        knowledge_base.store_session_artifact(updated_artifact)
-        return (updated_artifact, None)
-    finally:
-        knowledge_base.close()
+        finally:
+            if knowledge_base is not None:
+                knowledge_base.close()
 
 
 def _render_coverage_summary(summary, *, config_snapshot) -> None:
@@ -214,9 +240,17 @@ def _bootstrap_coverage(argv: list[str]) -> int:
             shutil.rmtree(workdir, ignore_errors=True)
 
 
+def _iter_bootstrap_handlers(
+    argv: list[str],
+) -> tuple[tuple[Callable[[list[str]], bool], Callable[[list[str]], int]], ...]:
+    del argv
+    return ((_should_bootstrap_coverage, _bootstrap_coverage),)
+
+
 def main(argv: list[str] | None = None) -> None:
     argv_list = list(sys.argv[1:] if argv is None else argv)
-    if _should_bootstrap_coverage(argv_list):
-        raise SystemExit(_bootstrap_coverage(argv_list))
+    for should_bootstrap, bootstrap in _iter_bootstrap_handlers(argv_list):
+        if should_bootstrap(argv_list):
+            raise SystemExit(bootstrap(argv_list))
 
     raise SystemExit(_run_runner_cli(argv_list))

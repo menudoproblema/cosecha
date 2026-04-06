@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import sys
 
 from types import SimpleNamespace
@@ -7,8 +8,17 @@ from types import SimpleNamespace
 import pytest
 
 from cosecha.core.config import ConfigSnapshot
+from cosecha.core.session_artifacts import (
+    InstrumentationSummary,
+    SessionArtifact,
+    SessionReportSummary,
+    SessionTelemetrySummary,
+    SessionTimingSnapshot,
+    SessionArtifactPersistencePolicy,
+)
 from cosecha.shell.launcher import (
     _bootstrap_coverage,
+    _update_session_artifact,
     _should_bootstrap_coverage,
     _strip_coverage_options,
     main,
@@ -183,3 +193,154 @@ def test_launcher_main_delegates_to_runner_cli_when_no_launcher_matches(
         main(['run', '--path', 'tests/unit'])
 
     assert error.value.code == 7
+
+
+def test_update_session_artifact_retries_when_artifact_is_not_visible_yet(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    calls = {'count': 0}
+    summary = InstrumentationSummary(
+        instrumentation_name='coverage',
+        summary_kind='coverage.py',
+        payload={'total_coverage': 87.5},
+    )
+    artifact = SessionArtifact(
+        session_id='session-1',
+        trace_id='trace-1',
+        root_path=str(tmp_path),
+        plan_id=None,
+        config_snapshot=ConfigSnapshot(
+            root_path=str(tmp_path),
+            output_mode='summary',
+            output_detail='standard',
+            capture_log=True,
+            stop_on_error=False,
+            concurrency=1,
+            strict_step_ambiguity=False,
+        ),
+        capability_snapshots=(),
+        plan_explanation=None,
+        timing=SessionTimingSnapshot(),
+        has_failures=False,
+        report_summary=SessionReportSummary(
+            total_tests=1,
+            status_counts=(('passed', 1),),
+            failure_kind_counts=(),
+            engine_summaries=(),
+            live_engine_snapshots=(),
+            failed_examples=(),
+            failed_files=(),
+            instrumentation_summaries={},
+        ),
+        telemetry_summary=SessionTelemetrySummary(
+            span_count=0,
+            distinct_span_names=0,
+        ),
+        persistence_policy=SessionArtifactPersistencePolicy(),
+        recorded_at=0.0,
+    )
+
+    class _FakeKnowledgeBase:
+        def query_session_artifacts(self, query) -> list[SessionArtifact]:
+            del query
+            calls['count'] += 1
+            if calls['count'] < 2:
+                return []
+            return [artifact]
+
+        def store_session_artifact(self, updated_artifact) -> None:
+            calls['stored'] = updated_artifact
+
+        def close(self) -> None:
+            calls['closed'] = calls.get('closed', 0) + 1
+
+    monkeypatch.setattr(
+        'cosecha.shell.launcher._open_knowledge_base',
+        lambda db_path: _FakeKnowledgeBase(),
+    )
+    monkeypatch.setattr(
+        'cosecha.shell.launcher.time.sleep',
+        lambda seconds: calls.setdefault('sleeps', []).append(seconds),
+    )
+
+    updated_artifact, warning = _update_session_artifact(
+        {
+            'knowledge_base_path': str(tmp_path / 'kb.db'),
+            'session_id': 'session-1',
+        },
+        summary=summary,
+    )
+
+    assert warning is None
+    assert updated_artifact is not None
+    assert calls['count'] == 2
+    assert calls['sleeps'] == [0.05]
+    assert (
+        calls['stored'].report_summary.instrumentation_summaries['coverage']
+        == summary
+    )
+
+
+def test_update_session_artifact_retries_on_operational_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    calls = {'count': 0}
+
+    class _FakeKnowledgeBase:
+        def query_session_artifacts(self, query) -> list[object]:
+            del query
+            return []
+
+        def close(self) -> None:
+            return None
+
+    def fake_open(db_path):
+        del db_path
+        calls['count'] += 1
+        if calls['count'] < 3:
+            raise sqlite3.OperationalError('database is locked')
+        return _FakeKnowledgeBase()
+
+    monkeypatch.setattr('cosecha.shell.launcher._open_knowledge_base', fake_open)
+    monkeypatch.setattr(
+        'cosecha.shell.launcher.time.sleep',
+        lambda seconds: calls.setdefault('sleeps', []).append(seconds),
+    )
+
+    updated_artifact, warning = _update_session_artifact(
+        {
+            'knowledge_base_path': str(tmp_path / 'kb.db'),
+            'session_id': 'session-1',
+        },
+        summary=InstrumentationSummary(
+            instrumentation_name='coverage',
+            summary_kind='coverage.py',
+            payload={'total_coverage': 87.5},
+        ),
+    )
+
+    assert updated_artifact is None
+    assert warning == 'session artifact not found for session-1'
+    assert calls['count'] == 3
+    assert calls['sleeps'] == [0.05, 0.05]
+
+
+def test_launcher_main_uses_internal_bootstrap_handlers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        'cosecha.shell.launcher._iter_bootstrap_handlers',
+        lambda argv: (
+            (
+                lambda received: received == argv,
+                lambda received: 11 if received == argv else 3,
+            ),
+        ),
+    )
+
+    with pytest.raises(SystemExit) as error:
+        main(['run', '--cov', 'src/demo'])
+
+    assert error.value.code == 11
