@@ -167,7 +167,7 @@ def build_coverage_summary(
         measurement_scope='controller_process',
         branch=bool(cov.config.branch),
         source_targets=source_targets,
-        includes_worker_processes=False,
+        includes_worker_processes=True,
     )
 
 

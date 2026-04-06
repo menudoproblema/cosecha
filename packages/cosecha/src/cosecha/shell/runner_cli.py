@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 
 from dataclasses import dataclass
@@ -18,6 +19,9 @@ from cosecha.core.cosecha_manifest import (
     load_cosecha_manifest,
     register_manifest_hook_arguments,
     validate_cosecha_manifest,
+)
+from cosecha.core.instrumentation import (
+    COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
 )
 from cosecha.core.discovery import (
     create_loaded_discovery_registry,
@@ -241,6 +245,27 @@ class QueryRenderOptions:
     fields: tuple[str, ...] = ()
     view: str = 'full'
     preset: str | None = None
+
+
+def _write_instrumentation_metadata_from_environment(
+    artifact,
+    db_path: Path | None,
+) -> None:
+    metadata_path_raw = os.environ.get(
+        COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
+    )
+    if not metadata_path_raw:
+        return
+
+    metadata_path = Path(metadata_path_raw)
+    payload = {
+        'knowledge_base_path': None if db_path is None else str(db_path),
+        'root_path': artifact.root_path,
+        'session_id': artifact.session_id,
+    }
+    temp_path = metadata_path.with_name(f'{metadata_path.name}.tmp')
+    temp_path.write_text(json.dumps(payload), encoding='utf-8')
+    temp_path.replace(metadata_path)
 
 
 @dataclass(slots=True, frozen=True)
@@ -2437,6 +2462,9 @@ async def _validate_gherkin_features(
         hooks,
         list(context.plugins),
         runtime_provider=context.runtime_provider,
+        session_artifact_metadata_writer=(
+            _write_instrumentation_metadata_from_environment
+        ),
     )
 
     issues_by_file: list[tuple[Path, tuple[str, ...]]] = []
@@ -2582,6 +2610,9 @@ async def _validate_pytest_modules(
         hooks,
         list(context.plugins),
         runtime_provider=context.runtime_provider,
+        session_artifact_metadata_writer=(
+            _write_instrumentation_metadata_from_environment
+        ),
     )
 
     issues_by_file: list[tuple[Path, tuple[str, ...]]] = []
@@ -2793,6 +2824,9 @@ def _execute_knowledge_rebuild(request: KnowledgeRebuildCliRequest) -> None:
         hooks,
         list(context.plugins),
         runtime_provider=context.runtime_provider,
+        session_artifact_metadata_writer=(
+            _write_instrumentation_metadata_from_environment
+        ),
     )
 
     async def _rebuild_snapshot():
@@ -3443,6 +3477,9 @@ def _execute_runtime_request(request: CliRequest) -> None:
         hooks,
         list(context.plugins),
         runtime_provider=context.runtime_provider,
+        session_artifact_metadata_writer=(
+            _write_instrumentation_metadata_from_environment
+        ),
     )
 
     if isinstance(

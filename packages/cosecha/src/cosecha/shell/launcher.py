@@ -167,6 +167,18 @@ def _render_coverage_summary(summary, *, config_snapshot) -> None:
     console.print_summary('Coverage', '\n'.join(lines))
 
 
+def _emit_coverage_warning(
+    message: str,
+    *,
+    config_snapshot=None,
+) -> None:
+    if config_snapshot is None:
+        print(f'Coverage warning: {message}')
+        return
+    console = Config.from_snapshot(config_snapshot).console
+    console.print_summary('Coverage Warning', message)
+
+
 def _bootstrap_coverage(argv: list[str]) -> int:
     try:
         from cosecha.plugin.coverage import CoverageInstrumenter
@@ -191,7 +203,7 @@ def _bootstrap_coverage(argv: list[str]) -> int:
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_text(contents, encoding='utf-8')
         for warning in contribution.warnings:
-            print(f'Coverage warning: {warning}')
+            _emit_coverage_warning(warning)
 
         env = os.environ.copy()
         env.update(contribution.env)
@@ -206,9 +218,8 @@ def _bootstrap_coverage(argv: list[str]) -> int:
 
         metadata = _load_metadata(metadata_path)
         if metadata is None:
-            print(
-                'Coverage warning: no session metadata was written; '
-                'coverage was not persisted.',
+            _emit_coverage_warning(
+                'no session metadata was written; coverage was not persisted.',
             )
             return int(completed.returncode)
 
@@ -219,9 +230,8 @@ def _bootstrap_coverage(argv: list[str]) -> int:
                 summary=summary,
             )
             if updated_artifact is None and warning is not None:
-                print(
-                    'Coverage warning: coverage was collected but not '
-                    f'persisted ({warning}).',
+                _emit_coverage_warning(
+                    f'coverage was collected but not persisted ({warning}).',
                 )
             if updated_artifact is not None:
                 _render_coverage_summary(
@@ -230,8 +240,8 @@ def _bootstrap_coverage(argv: list[str]) -> int:
                 )
         except Exception as error:
             cleanup_workdir = False
-            print(
-                'Coverage warning: failed to collect coverage '
+            _emit_coverage_warning(
+                'failed to collect coverage '
                 f'({error}). Preserved workdir: {workdir}',
             )
         return int(completed.returncode)

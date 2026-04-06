@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import runpy
+import subprocess
 import sys
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import coverage
@@ -139,3 +142,70 @@ def test_collect_respects_branch_from_user_config_when_flag_not_passed(
 
     assert 'branch' not in recorded_kwargs
     assert summary.payload['branch'] is True
+
+
+def test_prepare_instruments_python_subprocesses_with_process_start(
+    tmp_path,
+) -> None:
+    package_path = tmp_path / 'demo_pkg'
+    package_path.mkdir()
+    (package_path / '__init__.py').write_text('', encoding='utf-8')
+    child_path = package_path / 'child.py'
+    child_path.write_text(
+        'VALUE = 1\nRESULT = VALUE + 1\n',
+        encoding='utf-8',
+    )
+    parent_path = tmp_path / 'parent.py'
+    parent_path.write_text(
+        '\n'.join(
+            (
+                'import subprocess',
+                'import sys',
+                '',
+                'subprocess.run(',
+                "    [sys.executable, '-m', 'demo_pkg.child'],",
+                '    check=True,',
+                ')',
+            ),
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    instrumenter = CoverageInstrumenter(
+        CoverageRequest(source_targets=(str(package_path),)),
+    )
+    contribution = instrumenter.prepare(workdir=tmp_path)
+    for relative_path, contents in contribution.workdir_files.items():
+        (tmp_path / relative_path).write_text(contents, encoding='utf-8')
+
+    env = os.environ.copy()
+    env.update(contribution.env)
+    subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            '-m',
+            'coverage',
+            'run',
+            f'--rcfile={tmp_path / ".cosecha.coveragerc"}',
+            str(parent_path),
+        ],
+        check=True,
+        cwd=tmp_path,
+        env=env,
+    )
+
+    summary = instrumenter.collect(workdir=tmp_path)
+
+    coverage_runtime = coverage.Coverage(
+        config_file=str(tmp_path / '.cosecha.coveragerc'),
+        data_file=str(tmp_path / '.coverage'),
+    )
+    coverage_runtime.load()
+    measured_files = {
+        Path(measured_file).resolve()
+        for measured_file in coverage_runtime.get_data().measured_files()
+    }
+
+    assert child_path.resolve() in measured_files
+    assert summary.payload['includes_worker_processes'] is True

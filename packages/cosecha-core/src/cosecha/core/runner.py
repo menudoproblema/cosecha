@@ -3,9 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
-import json
 import logging
-import os
 import sys
 import time
 
@@ -83,9 +81,6 @@ from cosecha.core.extensions import (
     build_plugin_extension_snapshot,
     build_reporter_extension_snapshot,
     build_runtime_extension_snapshot,
-)
-from cosecha.core.instrumentation import (
-    COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
 )
 from cosecha.core.items import (
     ExecutionPredicateEvaluation,
@@ -250,6 +245,7 @@ class Runner:
         '_root_logger_handlers',
         '_runtime_provider',
         '_scheduler',
+        '_session_artifact_metadata_writer',
         '_session_live_engine_snapshots',
         '_session_report_state',
         '_started_engines',
@@ -264,13 +260,16 @@ class Runner:
         'telemetry_stream',
     )
 
-    def __init__(  # noqa: PLR0915
+    def __init__(  # noqa: PLR0913, PLR0915
         self,
         config: Config,
         engines: dict[str, Engine],
         hooks: Iterable[Hook] = (),
         plugins: Iterable[Plugin] = (),
         runtime_provider: RuntimeProvider | None = None,
+        session_artifact_metadata_writer: (
+            Callable[[SessionArtifact, Path | None], None] | None
+        ) = None,
     ) -> None:
         self.config = config
         self.console = self.config.console
@@ -356,6 +355,9 @@ class Runner:
         self._resource_manager.bind_telemetry_stream(self.telemetry_stream)
         self._reporting_coordinator.bind_telemetry_stream(self.telemetry_stream)
         self._runtime_provider = runtime_provider or LocalRuntimeProvider()
+        self._session_artifact_metadata_writer = (
+            session_artifact_metadata_writer
+        )
         self._runtime_provider.initialize(config)
         self._scheduler = ExecutionScheduler(
             worker_selection_policy=(
@@ -3143,36 +3145,16 @@ class Runner:
                 writer.store_session_artifact(artifact)
             finally:
                 writer.close()
-            self._write_instrumentation_metadata_file(
-                artifact,
-                db_path=self._knowledge_base.db_path,
-            )
+            if self._session_artifact_metadata_writer is not None:
+                self._session_artifact_metadata_writer(
+                    artifact,
+                    self._knowledge_base.db_path,
+                )
             return
 
         self._knowledge_base.store_session_artifact(artifact)
-        self._write_instrumentation_metadata_file(artifact, db_path=None)
-
-    def _write_instrumentation_metadata_file(
-        self,
-        artifact: SessionArtifact,
-        *,
-        db_path: Path | None,
-    ) -> None:
-        metadata_path_raw = os.environ.get(
-            COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
-        )
-        if not metadata_path_raw:
-            return
-
-        metadata_path = Path(metadata_path_raw)
-        payload = {
-            'knowledge_base_path': None if db_path is None else str(db_path),
-            'root_path': artifact.root_path,
-            'session_id': artifact.session_id,
-        }
-        temp_path = metadata_path.with_name(f'{metadata_path.name}.tmp')
-        temp_path.write_text(json.dumps(payload), encoding='utf-8')
-        temp_path.replace(metadata_path)
+        if self._session_artifact_metadata_writer is not None:
+            self._session_artifact_metadata_writer(artifact, None)
 
     def _build_session_report_summary(
         self,

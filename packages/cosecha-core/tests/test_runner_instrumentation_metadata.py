@@ -8,8 +8,10 @@ from cosecha.core.config import ConfigSnapshot
 from cosecha.core.instrumentation import (
     COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
 )
-from cosecha.core.runner import Runner
 from cosecha.core.session_artifacts import SessionArtifact
+from cosecha.shell.runner_cli import (
+    _write_instrumentation_metadata_from_environment,
+)
 
 
 def _build_artifact() -> SessionArtifact:
@@ -40,14 +42,12 @@ def test_write_instrumentation_metadata_file_is_atomic(
         str(metadata_path),
     )
 
-    runner = object.__new__(Runner)
     artifact = _build_artifact()
     db_path = tmp_path / 'kb.db'
 
-    Runner._write_instrumentation_metadata_file(
-        runner,
+    _write_instrumentation_metadata_from_environment(
         artifact,
-        db_path=db_path,
+        db_path,
     )
 
     assert metadata_path.exists()
