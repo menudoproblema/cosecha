@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cosecha.core.config import ConfigSnapshot
 from cosecha.shell.launcher import (
     _bootstrap_coverage,
     _should_bootstrap_coverage,
@@ -63,11 +64,29 @@ def test_bootstrap_coverage_reexecutes_under_coverage(
         lambda metadata, *, summary: recorded.update(
             {'metadata': metadata, 'summary': summary},
         )
-        or (True, None),
+        or (
+            SimpleNamespace(
+                config_snapshot=ConfigSnapshot(
+                    root_path='/workspace/demo',
+                    output_mode='summary',
+                    output_detail='standard',
+                    capture_log=True,
+                    stop_on_error=False,
+                    concurrency=1,
+                    strict_step_ambiguity=False,
+                ),
+            ),
+            None,
+        ),
     )
     monkeypatch.setattr(
         'cosecha.shell.launcher._render_coverage_summary',
-        lambda summary: recorded.update({'rendered_summary': summary}),
+        lambda summary, *, config_snapshot: recorded.update(
+            {
+                'config_snapshot': config_snapshot,
+                'rendered_summary': summary,
+            },
+        ),
     )
     monkeypatch.setattr(
         'cosecha.plugin.coverage.CoverageInstrumenter.collect',
@@ -100,6 +119,7 @@ def test_bootstrap_coverage_reexecutes_under_coverage(
     assert recorded['env']['COSECHA_COVERAGE_ACTIVE'] == '1'
     assert recorded['metadata']['session_id'] == 'session-1'
     assert recorded['summary'].instrumentation_name == 'coverage'
+    assert recorded['config_snapshot'].output_mode == 'summary'
     assert recorded['rendered_summary'].instrumentation_name == 'coverage'
 
 
@@ -119,7 +139,13 @@ def test_bootstrap_coverage_warns_when_summary_is_not_persisted(
     monkeypatch.setattr('cosecha.shell.launcher.subprocess.run', fake_run)
     monkeypatch.setattr(
         'cosecha.shell.launcher._update_session_artifact',
-        lambda metadata, *, summary: (False, 'session artifact not found'),
+        lambda metadata, *, summary: (None, 'session artifact not found'),
+    )
+    monkeypatch.setattr(
+        'cosecha.shell.launcher._render_coverage_summary',
+        lambda summary, *, config_snapshot: pytest.fail(
+            'coverage should not render when persistence fails',
+        ),
     )
     monkeypatch.setattr(
         'cosecha.plugin.coverage.CoverageInstrumenter.collect',

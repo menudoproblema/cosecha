@@ -10,11 +10,16 @@ import tempfile
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+
+from cosecha.core.config import Config
 from cosecha.core.instrumentation import (
     COSECHA_COVERAGE_ACTIVE_ENV,
     COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
 )
-from cosecha.core.knowledge_base import PersistentKnowledgeBase, SessionArtifactQuery
+from cosecha.core.knowledge_base import (
+    PersistentKnowledgeBase,
+    SessionArtifactQuery,
+)
 
 
 def _strip_coverage_options(argv: list[str]) -> list[str]:
@@ -66,14 +71,14 @@ def _update_session_artifact(
     metadata: dict[str, object],
     *,
     summary,
-) -> tuple[bool, str | None]:
+) -> tuple[object | None, str | None]:
     knowledge_base_path = metadata.get('knowledge_base_path')
     session_id = metadata.get('session_id')
     if not isinstance(knowledge_base_path, str) or not isinstance(
         session_id,
         str,
     ):
-        return (False, 'session metadata is incomplete')
+        return (None, 'session metadata is incomplete')
 
     knowledge_base = PersistentKnowledgeBase(Path(knowledge_base_path))
     try:
@@ -81,12 +86,12 @@ def _update_session_artifact(
             SessionArtifactQuery(session_id=session_id, limit=1),
         )
         if not artifacts:
-            return (False, f'session artifact not found for {session_id}')
+            return (None, f'session artifact not found for {session_id}')
         artifact = artifacts[0]
         report_summary = artifact.report_summary
         if report_summary is None:
             return (
-                False,
+                None,
                 f'session artifact {session_id} has no report summary',
             )
         updated_report_summary = replace(
@@ -96,15 +101,17 @@ def _update_session_artifact(
                 summary.instrumentation_name: summary,
             },
         )
-        knowledge_base.store_session_artifact(
-            replace(artifact, report_summary=updated_report_summary),
+        updated_artifact = replace(
+            artifact,
+            report_summary=updated_report_summary,
         )
-        return (True, None)
+        knowledge_base.store_session_artifact(updated_artifact)
+        return (updated_artifact, None)
     finally:
         knowledge_base.close()
 
 
-def _render_coverage_summary(summary) -> None:
+def _render_coverage_summary(summary, *, config_snapshot) -> None:
     payload = summary.payload
     total_coverage = payload.get('total_coverage')
     measurement_scope = payload.get('measurement_scope')
@@ -130,8 +137,8 @@ def _render_coverage_summary(summary) -> None:
         )
     if payload.get('includes_worker_processes') is False:
         lines.append('  worker processes are not included in this measurement')
-    print('Coverage')
-    print('\n'.join(lines))
+    console = Config.from_snapshot(config_snapshot).console
+    console.print_summary('Coverage', '\n'.join(lines))
 
 
 def _bootstrap_coverage(argv: list[str]) -> int:
@@ -181,16 +188,20 @@ def _bootstrap_coverage(argv: list[str]) -> int:
 
         try:
             summary = instrumenter.collect(workdir=workdir)
-            persisted, warning = _update_session_artifact(
+            updated_artifact, warning = _update_session_artifact(
                 metadata,
                 summary=summary,
             )
-            if not persisted and warning is not None:
+            if updated_artifact is None and warning is not None:
                 print(
                     'Coverage warning: coverage was collected but not '
                     f'persisted ({warning}).',
                 )
-            _render_coverage_summary(summary)
+            if updated_artifact is not None:
+                _render_coverage_summary(
+                    summary,
+                    config_snapshot=updated_artifact.config_snapshot,
+                )
         except Exception as error:
             cleanup_workdir = False
             print(
