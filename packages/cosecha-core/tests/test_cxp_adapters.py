@@ -54,14 +54,6 @@ sys.path.insert(
     0,
     str(
         Path(__file__).resolve().parents[2]
-        / 'cosecha-plugin-coverage'
-        / 'src',
-    ),
-)
-sys.path.insert(
-    0,
-    str(
-        Path(__file__).resolve().parents[2]
         / 'cosecha-plugin-timing'
         / 'src',
     ),
@@ -100,7 +92,6 @@ from cxp import (
 from cosecha.core.plugins.telemetry import TelemetryPlugin
 from cosecha.engine.gherkin.engine import GherkinEngine
 from cosecha.engine.pytest.engine import PytestEngine
-from cosecha.plugin.coverage import CoveragePlugin
 from cosecha.plugin.timing import TimingPlugin
 from cosecha.reporter.console import ConsoleReporter
 from cosecha.reporter.json import JsonReporter
@@ -351,7 +342,6 @@ def test_real_reporter_packages_build_valid_cxp_snapshots() -> None:
 
 def test_real_plugin_packages_build_valid_cxp_snapshots() -> None:
     for plugin in (
-        CoveragePlugin(),
         TimingPlugin(),
         TelemetryPlugin(Path('telemetry.jsonl')),
     ):

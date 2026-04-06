@@ -1,145 +1,41 @@
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from cosecha.core.instrumentation import (
+    COSECHA_COVERAGE_ACTIVE_ENV,
+    COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
+)
+from cosecha.core.knowledge_base import PersistentKnowledgeBase, SessionArtifactQuery
 
 
-if TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Sequence
-
-
-_ACTIVE_EXECUTION_LAUNCHER_ENV = 'COSECHA_ACTIVE_EXECUTION_LAUNCHER'
-
-
-class ExecutionLauncher(Protocol):
-    launcher_name: str
-
-    def matches(self, argv: Sequence[str]) -> bool: ...
-
-    def launch(self, argv: Sequence[str]) -> int: ...
-
-
-@dataclass(slots=True, frozen=True)
-class CoverageLaunchSpec:
-    source_targets: tuple[str, ...]
-    branch: bool = False
-
-    def build_rcfile_content(self) -> str:
-        source_lines = '\n'.join(
-            f'    {source_target}'
-            for source_target in self.source_targets
-        )
-        branch_value = 'True' if self.branch else 'False'
-        return '\n'.join(
-            (
-                '[run]',
-                f'branch = {branch_value}',
-                'parallel = True',
-                'patch = subprocess',
-                'source =',
-                source_lines,
-                '',
-            ),
-        )
-
-
-class CoverageLauncher:
-    launcher_name = 'coverage'
-
-    def matches(self, argv: Sequence[str]) -> bool:
-        if os.environ.get(_ACTIVE_EXECUTION_LAUNCHER_ENV) == self.launcher_name:
-            return False
-        if not argv or argv[0] != 'run':
-            return False
-        return _extract_option_values(argv, '--cov') != ()
-
-    def launch(self, argv: Sequence[str]) -> int:
-        spec = _parse_coverage_launch_spec(argv)
-        if spec is None:
-            msg = 'CoverageLauncher requires at least one --cov target'
-            raise ValueError(msg)
-
-        with tempfile.NamedTemporaryFile(
-            mode='w',
-            suffix='.coveragerc',
-            encoding='utf-8',
-            delete=False,
-        ) as rcfile:
-            rcfile.write(spec.build_rcfile_content())
-            rcfile_path = Path(rcfile.name)
-
-        try:
-            command = [
-                sys.executable,
-                '-m',
-                'coverage',
-                'run',
-                f'--rcfile={rcfile_path}',
-                '-m',
-                'cosecha.shell.runner_cli',
-                *argv,
-            ]
-            env = os.environ.copy()
-            env[_ACTIVE_EXECUTION_LAUNCHER_ENV] = self.launcher_name
-            env['COVERAGE_PROCESS_START'] = str(rcfile_path)
-            completed = subprocess.run(  # noqa: S603
-                command,
-                check=False,
-                env=env,
-            )
-        finally:
-            rcfile_path.unlink(missing_ok=True)
-
-        return completed.returncode
-
-
-def _extract_option_values(
-    argv: Sequence[str],
-    option_name: str,
-) -> tuple[str, ...]:
-    values: list[str] = []
-    iterator = iter(range(len(argv)))
-    for index in iterator:
+def _strip_coverage_options(argv: list[str]) -> list[str]:
+    stripped: list[str] = []
+    index = 0
+    while index < len(argv):
         argument = argv[index]
-        prefix = f'{option_name}='
-        if argument.startswith(prefix):
-            values.append(argument.removeprefix(prefix))
+        if argument.startswith('--cov=') or argument in {
+            '--cov-branch',
+        }:
+            index += 1
             continue
-        if argument != option_name:
+        if argument in {'--cov', '--cov-report'}:
+            index += 2
             continue
-        next_index = index + 1
-        if next_index >= len(argv):
-            break
-        values.append(argv[next_index])
-        next(iterator, None)
-    return tuple(values)
-
-
-def _parse_coverage_launch_spec(
-    argv: Sequence[str],
-) -> CoverageLaunchSpec | None:
-    source_targets = tuple(
-        target.strip()
-        for raw_value in _extract_option_values(argv, '--cov')
-        for target in raw_value.split(',')
-        if target.strip()
-    )
-    if not source_targets:
-        return None
-    return CoverageLaunchSpec(
-        source_targets=source_targets,
-        branch='--cov-branch' in argv,
-    )
-
-
-def _iter_execution_launchers() -> tuple[ExecutionLauncher, ...]:
-    return (CoverageLauncher(),)
+        if argument.startswith('--cov-report='):
+            index += 1
+            continue
+        stripped.append(argument)
+        index += 1
+    return stripped
 
 
 def _run_runner_cli(argv: Sequence[str]) -> int:
@@ -149,11 +45,155 @@ def _run_runner_cli(argv: Sequence[str]) -> int:
     return 0
 
 
+def _should_bootstrap_coverage(argv: list[str]) -> bool:
+    if os.environ.get(COSECHA_COVERAGE_ACTIVE_ENV) == '1':
+        return False
+    if not argv or argv[0] != 'run':
+        return False
+    return any(
+        argument == '--cov' or argument.startswith('--cov=')
+        for argument in argv
+    )
+
+
+def _load_metadata(metadata_path: Path) -> dict[str, object] | None:
+    if not metadata_path.exists():
+        return None
+    return json.loads(metadata_path.read_text(encoding='utf-8'))
+
+
+def _update_session_artifact(
+    metadata: dict[str, object],
+    *,
+    summary,
+) -> None:
+    knowledge_base_path = metadata.get('knowledge_base_path')
+    session_id = metadata.get('session_id')
+    if not isinstance(knowledge_base_path, str) or not isinstance(
+        session_id,
+        str,
+    ):
+        return
+
+    knowledge_base = PersistentKnowledgeBase(Path(knowledge_base_path))
+    try:
+        artifacts = knowledge_base.query_session_artifacts(
+            SessionArtifactQuery(session_id=session_id, limit=1),
+        )
+        if not artifacts:
+            return
+        artifact = artifacts[0]
+        report_summary = artifact.report_summary
+        if report_summary is None:
+            return
+        updated_report_summary = replace(
+            report_summary,
+            instrumentation_summaries={
+                **report_summary.instrumentation_summaries,
+                summary.instrumentation_name: summary,
+            },
+        )
+        knowledge_base.store_session_artifact(
+            replace(artifact, report_summary=updated_report_summary),
+        )
+    finally:
+        knowledge_base.close()
+
+
+def _render_coverage_summary(summary) -> None:
+    payload = summary.payload
+    total_coverage = payload.get('total_coverage')
+    measurement_scope = payload.get('measurement_scope')
+    if not isinstance(total_coverage, int | float):
+        return
+    if not isinstance(measurement_scope, str):
+        measurement_scope = 'controller_process'
+
+    lines = [
+        (
+            'Coverage: '
+            f'{float(total_coverage):.2f}% '
+            f'[{measurement_scope}]'
+        ),
+    ]
+    engine_names = payload.get('engine_names')
+    if isinstance(engine_names, list) and engine_names:
+        lines.append('  engines: ' + ', '.join(str(name) for name in engine_names))
+    source_targets = payload.get('source_targets')
+    if isinstance(source_targets, list) and source_targets:
+        lines.append(
+            '  sources: ' + ', '.join(str(target) for target in source_targets),
+        )
+    if payload.get('includes_worker_processes') is False:
+        lines.append('  worker processes are not included in this measurement')
+    print('Coverage')
+    print('\n'.join(lines))
+
+
+def _bootstrap_coverage(argv: list[str]) -> int:
+    try:
+        from cosecha.plugin.coverage import CoverageInstrumenter
+    except ImportError as error:
+        print(
+            'Coverage support is not installed. Install cosecha[coverage].',
+        )
+        raise SystemExit(2) from error
+
+    instrumenter = CoverageInstrumenter.from_argv(argv)
+    if instrumenter is None:
+        return _run_runner_cli(argv)
+
+    stripped_argv = _strip_coverage_options(argv)
+    workdir = Path(tempfile.mkdtemp(prefix='cosecha-coverage-'))
+    cleanup_workdir = True
+    try:
+        metadata_path = workdir / 'run-metadata.json'
+        contribution = instrumenter.prepare(workdir=workdir)
+        for relative_path, contents in contribution.workdir_files.items():
+            target_path = workdir / relative_path
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(contents, encoding='utf-8')
+        for warning in contribution.warnings:
+            print(f'Coverage warning: {warning}')
+
+        env = os.environ.copy()
+        env.update(contribution.env)
+        env[COSECHA_COVERAGE_ACTIVE_ENV] = '1'
+        env[COSECHA_INSTRUMENTATION_METADATA_FILE_ENV] = str(metadata_path)
+        command = [*contribution.argv_prefix, *stripped_argv]
+        completed = subprocess.run(  # noqa: S603
+            command,
+            check=False,
+            env=env,
+        )
+
+        metadata = _load_metadata(metadata_path)
+        if metadata is None:
+            print(
+                'Coverage warning: no session metadata was written; '
+                'coverage was not persisted.',
+            )
+            return int(completed.returncode)
+
+        try:
+            summary = instrumenter.collect(workdir=workdir)
+            _update_session_artifact(metadata, summary=summary)
+            _render_coverage_summary(summary)
+        except Exception as error:
+            cleanup_workdir = False
+            print(
+                'Coverage warning: failed to collect coverage '
+                f'({error}). Preserved workdir: {workdir}',
+            )
+        return int(completed.returncode)
+    finally:
+        if cleanup_workdir:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+
 def main(argv: list[str] | None = None) -> None:
     argv_list = list(sys.argv[1:] if argv is None else argv)
-    for launcher in _iter_execution_launchers():
-        if not launcher.matches(argv_list):
-            continue
-        raise SystemExit(launcher.launch(argv_list))
+    if _should_bootstrap_coverage(argv_list):
+        raise SystemExit(_bootstrap_coverage(argv_list))
 
     raise SystemExit(_run_runner_cli(argv_list))

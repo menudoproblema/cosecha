@@ -1,91 +1,110 @@
 from __future__ import annotations
 
-import os
+import sys
 
 from types import SimpleNamespace
 
 import pytest
 
 from cosecha.shell.launcher import (
-    CoverageLauncher,
-    _ACTIVE_EXECUTION_LAUNCHER_ENV,
-    _parse_coverage_launch_spec,
+    _bootstrap_coverage,
+    _should_bootstrap_coverage,
+    _strip_coverage_options,
     main,
 )
 
 
-def test_parse_coverage_launch_spec_collects_sources_and_branch() -> None:
-    spec = _parse_coverage_launch_spec(
-        (
+def test_should_bootstrap_coverage_only_for_run_commands_with_cov(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv('COSECHA_COVERAGE_ACTIVE', raising=False)
+    assert _should_bootstrap_coverage(['run', '--cov', 'src/demo']) is True
+    assert _should_bootstrap_coverage(['plan', '--cov', 'src/demo']) is False
+    assert _should_bootstrap_coverage(['run', '--path', 'tests/unit']) is False
+
+    monkeypatch.setenv('COSECHA_COVERAGE_ACTIVE', '1')
+    assert _should_bootstrap_coverage(['run', '--cov', 'src/demo']) is False
+
+
+def test_strip_coverage_options_removes_bootstrap_flags() -> None:
+    assert _strip_coverage_options(
+        [
             'run',
             '--cov',
-            'src/one,src/two',
-            '--cov=src/three',
+            'src/demo',
+            '--cov-report',
+            'term-missing',
             '--cov-branch',
-        ),
-    )
-
-    assert spec is not None
-    assert spec.source_targets == ('src/one', 'src/two', 'src/three')
-    assert spec.branch is True
+            '--path',
+            'tests/unit',
+        ],
+    ) == ['run', '--path', 'tests/unit']
 
 
-def test_coverage_launcher_matches_only_run_commands_with_cov(
+def test_bootstrap_coverage_reexecutes_under_coverage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    launcher = CoverageLauncher()
-
-    monkeypatch.delenv(_ACTIVE_EXECUTION_LAUNCHER_ENV, raising=False)
-    assert launcher.matches(('run', '--cov', 'src/demo')) is True
-    assert launcher.matches(('plan', '--cov', 'src/demo')) is False
-    assert launcher.matches(('run', '--path', 'tests/unit')) is False
-
-    monkeypatch.setenv(_ACTIVE_EXECUTION_LAUNCHER_ENV, 'coverage')
-    assert launcher.matches(('run', '--cov', 'src/demo')) is False
-
-
-def test_coverage_launcher_reexecutes_under_coverage(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    launcher = CoverageLauncher()
     recorded: dict[str, object] = {}
 
     def fake_run(command, *, check, env):
         recorded['command'] = command
         recorded['check'] = check
         recorded['env'] = env
+        metadata_path = env['COSECHA_INSTRUMENTATION_METADATA_FILE']
+        with open(metadata_path, 'w', encoding='utf-8') as handle:
+            handle.write(
+                '{"knowledge_base_path": null, "session_id": "session-1"}',
+            )
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr('cosecha.shell.launcher.subprocess.run', fake_run)
+    monkeypatch.setattr(
+        'cosecha.shell.launcher._update_session_artifact',
+        lambda metadata, *, summary: recorded.update(
+            {'metadata': metadata, 'summary': summary},
+        ),
+    )
+    monkeypatch.setattr(
+        'cosecha.shell.launcher._render_coverage_summary',
+        lambda summary: recorded.update({'rendered_summary': summary}),
+    )
+    monkeypatch.setattr(
+        'cosecha.plugin.coverage.CoverageInstrumenter.collect',
+        lambda self, *, workdir: SimpleNamespace(
+            instrumentation_name='coverage',
+            payload={'total_coverage': 87.5},
+        ),
+    )
 
-    exit_code = launcher.launch(
-        ('run', '--cov', 'src/demo', '--cov-branch', '--path', 'tests/unit'),
+    exit_code = _bootstrap_coverage(
+        ['run', '--cov', 'src/demo', '--cov-branch', '--path', 'tests/unit'],
     )
 
     assert exit_code == 0
-    assert recorded['command'][0:5] == [
-        os.sys.executable,
+    assert recorded['command'][0:4] == [
+        sys.executable,
         '-m',
         'coverage',
         'run',
-        recorded['command'][4],
     ]
-    assert recorded['command'][5:8] == [
+    assert '--parallel-mode' in recorded['command']
+    runner_module_index = recorded['command'].index(
+        'cosecha.shell.runner_cli',
+    )
+    assert recorded['command'][runner_module_index - 1 : runner_module_index + 2] == [
         '-m',
         'cosecha.shell.runner_cli',
         'run',
     ]
-    assert recorded['env'][_ACTIVE_EXECUTION_LAUNCHER_ENV] == 'coverage'
-    assert recorded['env']['COVERAGE_PROCESS_START'].endswith('.coveragerc')
+    assert recorded['env']['COSECHA_COVERAGE_ACTIVE'] == '1'
+    assert recorded['metadata']['session_id'] == 'session-1'
+    assert recorded['summary'].instrumentation_name == 'coverage'
+    assert recorded['rendered_summary'].instrumentation_name == 'coverage'
 
 
 def test_launcher_main_delegates_to_runner_cli_when_no_launcher_matches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        'cosecha.shell.launcher._iter_execution_launchers',
-        lambda: (),
-    )
     monkeypatch.setattr(
         'cosecha.shell.launcher._run_runner_cli',
         lambda argv: 7 if tuple(argv) == ('run', '--path', 'tests/unit') else 3,

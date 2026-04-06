@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import json
 import logging
+import os
 import sys
 import time
 
@@ -81,6 +83,9 @@ from cosecha.core.extensions import (
     build_plugin_extension_snapshot,
     build_reporter_extension_snapshot,
     build_runtime_extension_snapshot,
+)
+from cosecha.core.instrumentation import (
+    COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
 )
 from cosecha.core.items import (
     ExecutionPredicateEvaluation,
@@ -3138,9 +3143,36 @@ class Runner:
                 writer.store_session_artifact(artifact)
             finally:
                 writer.close()
+            self._write_instrumentation_metadata_file(
+                artifact,
+                db_path=self._knowledge_base.db_path,
+            )
             return
 
         self._knowledge_base.store_session_artifact(artifact)
+        self._write_instrumentation_metadata_file(artifact, db_path=None)
+
+    def _write_instrumentation_metadata_file(
+        self,
+        artifact: SessionArtifact,
+        *,
+        db_path: Path | None,
+    ) -> None:
+        metadata_path_raw = os.environ.get(
+            COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
+        )
+        if not metadata_path_raw:
+            return
+
+        metadata_path = Path(metadata_path_raw)
+        payload = {
+            'knowledge_base_path': None if db_path is None else str(db_path),
+            'root_path': artifact.root_path,
+            'session_id': artifact.session_id,
+        }
+        temp_path = metadata_path.with_name(f'{metadata_path.name}.tmp')
+        temp_path.write_text(json.dumps(payload), encoding='utf-8')
+        temp_path.replace(metadata_path)
 
     def _build_session_report_summary(
         self,
