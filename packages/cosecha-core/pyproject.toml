@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Cosecha Agnostics Core"
 requires-python = ">=3.13"
 dependencies = [
-    "cxp==1.0.0",
+    "cxp==2.0.0",
     "msgspec==0.20.0",
 ]
 

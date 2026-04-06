@@ -46,7 +46,11 @@ class TimingPlugin(Plugin):
 
     @override
     async def after_session_closed(self) -> None:
-        self._print_timing_report()
+        async with self.context.telemetry_stream.span(
+            'plugin.timing.print_report',
+            attributes={'cosecha.plugin.name': self.plugin_name()},
+        ):
+            self._print_timing_report()
 
     def _append_phase_section(
         self,

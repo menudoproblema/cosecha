@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -23,7 +24,7 @@ from cosecha.core.serialization import (
 
 
 if TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Awaitable, Callable, Iterable
+    from collections.abc import Awaitable, Callable
 
     from cosecha.core.domain_event_stream import DomainEventStream
     from cosecha.core.telemetry import TelemetryStream
@@ -168,8 +169,9 @@ class CallableResourceProvider:
         requirement: ResourceRequirement,
         *,
         mode: ResourceProvisionMode,
+        dependency_context: ResourceDependencyContext | None = None,
     ) -> Awaitable[Any] | Any:
-        del requirement, mode
+        del dependency_context, requirement, mode
         return self.setup()
 
     def reserve_external_handle(
@@ -332,6 +334,64 @@ class ResourceTiming:
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> ResourceTiming:
         return from_builtins_dict(data, target_type=cls)
+
+
+@dataclass(slots=True, frozen=True)
+class ResolvedResourceDependency:
+    requirement: ResourceRequirement
+    provider: ResourceProvider
+    resource: object
+    scope: EffectiveResourceScope
+    capabilities: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(slots=True, frozen=True)
+class ResourceDependencyContext:
+    dependencies: dict[str, ResolvedResourceDependency] = field(
+        default_factory=dict,
+    )
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(self.dependencies)
+
+    def get(self, name: str, default: object | None = None) -> object | None:
+        dependency = self.dependencies.get(name)
+        if dependency is None:
+            return default
+        return dependency.resource
+
+    def get_dependency(
+        self,
+        name: str,
+    ) -> ResolvedResourceDependency | None:
+        return self.dependencies.get(name)
+
+    def get_capabilities(self, name: str) -> dict[str, object]:
+        dependency = self.get_dependency(name)
+        if dependency is None:
+            return {}
+        return dict(dependency.capabilities)
+
+    def require(
+        self,
+        name: str,
+        *,
+        requirement_name: str,
+    ) -> object:
+        dependency = self.get_dependency(name)
+        if dependency is not None:
+            return dependency.resource
+
+        msg = (
+            f'Resource {requirement_name!r} could not resolve dependency '
+            f'{name!r}'
+        )
+        raise ResourceError(
+            requirement_name,
+            msg,
+            code='resource_dependency_missing',
+            unhealthy=False,
+        )
 
 
 @dataclass(slots=True, frozen=True)
@@ -1146,13 +1206,21 @@ class ResourceManager:
             scope=normalized_scope,
             external_handle=reserved_external_handle,
         )
+        dependency_context = await self._build_dependency_context(
+            test_id,
+            requirement,
+        )
+        await _validate_provider_dependency_capabilities(
+            provider,
+            requirement,
+            dependency_context=dependency_context,
+        )
         try:
             if self._telemetry_stream is None:
-                resource = await _await_if_needed(
-                    provider.acquire(
-                        requirement,
-                        mode=requirement.mode,
-                    ),
+                resource = await _call_provider_acquire(
+                    provider,
+                    requirement,
+                    dependency_context=dependency_context,
                 )
                 await self._initialize_resource_if_needed(
                     test_id,
@@ -1186,11 +1254,10 @@ class ResourceManager:
                 parent_span_id=parent_span_id,
                 attributes=attributes,
             ):
-                resource = await _await_if_needed(
-                    provider.acquire(
-                        requirement,
-                        mode=requirement.mode,
-                    ),
+                resource = await _call_provider_acquire(
+                    provider,
+                    requirement,
+                    dependency_context=dependency_context,
                 )
                 await self._initialize_resource_if_needed(
                     test_id,
@@ -1227,6 +1294,80 @@ class ResourceManager:
                 external_handle=reserved_external_handle,
             )
             raise
+
+    async def _build_dependency_context(
+        self,
+        test_id: str | None,
+        requirement: ResourceRequirement,
+    ) -> ResourceDependencyContext:
+        dependencies: dict[str, ResolvedResourceDependency] = {}
+        for dependency_name in _iter_effective_dependency_names(requirement):
+            dependency = await self._resolve_materialized_dependency(
+                test_id,
+                requirement,
+                dependency_name,
+            )
+            dependencies[dependency_name] = dependency
+        return ResourceDependencyContext(dependencies)
+
+    async def _resolve_materialized_dependency(
+        self,
+        test_id: str | None,
+        requirement: ResourceRequirement,
+        dependency_name: str,
+    ) -> ResolvedResourceDependency:
+        for scope in ('run', 'worker'):
+            for (
+                dependency_requirement,
+                dependency_provider,
+                dependency_resource,
+            ) in reversed(self._shared_cleanup[scope]):
+                if dependency_requirement.name != dependency_name:
+                    continue
+                capabilities = await _describe_dependency_capabilities(
+                    dependency_provider,
+                    dependency_resource,
+                    dependency_requirement,
+                )
+                return ResolvedResourceDependency(
+                    requirement=dependency_requirement,
+                    provider=dependency_provider,
+                    resource=dependency_resource,
+                    scope=scope,
+                    capabilities=capabilities,
+                )
+
+        if test_id is not None:
+            for (
+                dependency_requirement,
+                dependency_provider,
+                dependency_resource,
+            ) in reversed(self._test_cleanup.get(test_id, ())):
+                if dependency_requirement.name != dependency_name:
+                    continue
+                capabilities = await _describe_dependency_capabilities(
+                    dependency_provider,
+                    dependency_resource,
+                    dependency_requirement,
+                )
+                return ResolvedResourceDependency(
+                    requirement=dependency_requirement,
+                    provider=dependency_provider,
+                    resource=dependency_resource,
+                    scope='test',
+                    capabilities=capabilities,
+                )
+
+        msg = (
+            f'Resource {requirement.name!r} could not resolve dependency '
+            f'{dependency_name!r}'
+        )
+        raise ResourceError(
+            requirement.name,
+            msg,
+            code='resource_dependency_missing',
+            unhealthy=False,
+        )
 
     async def _initialize_resource_if_needed(
         self,
@@ -1827,6 +1968,158 @@ def _call_supported_initialization_modes(
     return modes
 
 
+async def _call_provider_acquire(
+    provider: ResourceProvider,
+    requirement: ResourceRequirement,
+    *,
+    dependency_context: ResourceDependencyContext,
+) -> object:
+    acquire = provider.acquire
+    kwargs: dict[str, object] = {
+        'mode': requirement.mode,
+    }
+    if _callable_accepts_named_parameter(acquire, 'dependency_context'):
+        kwargs['dependency_context'] = dependency_context
+
+    return await _await_if_needed(acquire(requirement, **kwargs))
+
+
+async def _validate_provider_dependency_capabilities(
+    provider: ResourceProvider,
+    requirement: ResourceRequirement,
+    *,
+    dependency_context: ResourceDependencyContext,
+) -> None:
+    validator = getattr(provider, 'validate_dependency_capabilities', None)
+    if validator is None:
+        return
+
+    kwargs: dict[str, object] = {
+        'mode': requirement.mode,
+    }
+    if _callable_accepts_named_parameter(
+        validator,
+        'dependency_context',
+    ):
+        kwargs['dependency_context'] = dependency_context
+
+    await _await_if_needed(validator(requirement, **kwargs))
+
+
+async def _describe_dependency_capabilities(
+    provider: ResourceProvider,
+    resource: object,
+    requirement: ResourceRequirement,
+) -> dict[str, object]:
+    describe = getattr(provider, 'describe_capabilities', None)
+    if describe is None:
+        return {}
+
+    capabilities = await _await_if_needed(
+        describe(
+            resource,
+            requirement,
+            mode=requirement.mode,
+        ),
+    )
+    if capabilities is None:
+        return {}
+    if isinstance(capabilities, dict):
+        return {
+            str(key): value
+            for key, value in capabilities.items()
+        }
+
+    msg = (
+        f'Resource {requirement.name!r} returned invalid capabilities; '
+        'expected a mapping'
+    )
+    raise ResourceError(
+        requirement.name,
+        msg,
+        code='resource_capabilities_invalid',
+        unhealthy=False,
+    )
+
+
+def _iter_effective_dependency_names(
+    requirement: ResourceRequirement,
+) -> tuple[str, ...]:
+    extra_dependencies = _resolve_provider_dependency_names(requirement)
+    if not extra_dependencies:
+        return requirement.depends_on
+
+    ordered_names: list[str] = []
+    seen_names: set[str] = set()
+    for dependency_name in (*requirement.depends_on, *extra_dependencies):
+        if dependency_name in seen_names:
+            continue
+        seen_names.add(dependency_name)
+        ordered_names.append(dependency_name)
+    return tuple(ordered_names)
+
+
+def _resolve_provider_dependency_names(
+    requirement: ResourceRequirement,
+) -> tuple[str, ...]:
+    provider = requirement.resolve_provider()
+    resolver = getattr(provider, 'resolve_dependency_names', None)
+    if resolver is None:
+        return ()
+
+    if _callable_accepts_named_parameter(resolver, 'mode'):
+        dependency_names = resolver(
+            requirement,
+            mode=requirement.mode,
+        )
+    else:
+        dependency_names = resolver(requirement)
+
+    if dependency_names is None:
+        return ()
+    if isinstance(dependency_names, str):
+        dependency_names = (dependency_names,)
+
+    if isinstance(dependency_names, Iterable):
+        candidates = tuple(dependency_names)
+        normalized = tuple(
+            dependency_name
+            for dependency_name in candidates
+            if isinstance(dependency_name, str) and dependency_name
+        )
+        if len(normalized) == len(candidates):
+            return normalized
+
+    msg = (
+        f'Resource {requirement.name!r} returned invalid dependency names; '
+        'expected an iterable of non-empty strings'
+    )
+    raise ValueError(msg)
+
+
+def _callable_accepts_named_parameter(
+    callable_obj: object,
+    parameter_name: str,
+) -> bool:
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return False
+
+    for parameter in signature.parameters.values():
+        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+
+    parameter = signature.parameters.get(parameter_name)
+    if parameter is None:
+        return False
+
+    return parameter.kind in {
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    }
+
+
 def _describe_external_handle(
     provider: ResourceProvider,
     resource: object,
@@ -2115,9 +2408,10 @@ def validate_resource_requirements(
     }
 
     for requirement in normalized_requirements:
+        dependency_names = _iter_effective_dependency_names(requirement)
         missing_dependencies = sorted(
             dependency
-            for dependency in requirement.depends_on
+            for dependency in dependency_names
             if dependency not in requirements_by_name
         )
         if missing_dependencies:
@@ -2139,7 +2433,7 @@ def validate_resource_requirements(
             )
             raise ValueError(msg)
 
-        for dependency_name in requirement.depends_on:
+        for dependency_name in dependency_names:
             dependency = requirements_by_name[dependency_name]
             if _resource_scope_rank(dependency.scope) < _resource_scope_rank(
                 requirement.scope,
@@ -2182,7 +2476,7 @@ def validate_resource_requirements(
         normalized_requirements,
         requirements_by_name,
         relation_name='resource dependency',
-        dependency_getter=lambda requirement: requirement.depends_on,
+        dependency_getter=_iter_effective_dependency_names,
     )
     _validate_resource_dependency_cycles(
         normalized_requirements,
@@ -2195,7 +2489,7 @@ def validate_resource_requirements(
         requirements_by_name,
         relation_name='resource dependency',
         dependency_getter=lambda requirement: (
-            *requirement.depends_on,
+            *_iter_effective_dependency_names(requirement),
             *requirement.initializes_from,
         ),
     )
@@ -2248,10 +2542,10 @@ def _build_resource_levels(
     ) -> tuple[str, ...]:
         if include_initializers:
             return (
-                *requirement.depends_on,
+                *_iter_effective_dependency_names(requirement),
                 *requirement.initializes_from,
             )
-        return requirement.depends_on
+        return _iter_effective_dependency_names(requirement)
 
     def _resolve_depth(requirement: ResourceRequirement) -> int:
         cached_depth = dependency_depths.get(requirement.name)

@@ -18,7 +18,7 @@ type ReportSubject = TestItem | TestReport
 
 
 class Reporter(ABC):
-    __slots__ = ('config', 'console', 'engine')
+    __slots__ = ('config', 'console', 'engine', 'telemetry_stream')
 
     @classmethod
     def reporter_api_version(cls) -> int:
@@ -47,6 +47,10 @@ class Reporter(ABC):
         self.config = config
         self.console = self.config.console
         self.engine = engine
+        self.telemetry_stream = None
+
+    def bind_telemetry_stream(self, telemetry_stream) -> None:
+        self.telemetry_stream = telemetry_stream
 
     async def start(self): ...  # noqa: B027
 
@@ -101,6 +105,10 @@ class QueuedReporter(Reporter):
     ) -> None:
         super().initialize(config, engine)
         self._wrapped.initialize(config, engine)
+
+    def bind_telemetry_stream(self, telemetry_stream) -> None:
+        super().bind_telemetry_stream(telemetry_stream)
+        self._wrapped.bind_telemetry_stream(telemetry_stream)
 
     async def start(self) -> None:
         await self._wrapped.start()

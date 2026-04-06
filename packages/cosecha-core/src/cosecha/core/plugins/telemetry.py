@@ -44,7 +44,11 @@ class TelemetryPlugin(Plugin):
 
     @override
     async def start(self) -> None:
-        await self._sink.start()
+        async with self.context.telemetry_stream.span(
+            'plugin.telemetry.sink.start',
+            attributes={'cosecha.plugin.name': self.plugin_name()},
+        ):
+            await self._sink.start()
 
     @override
     async def finish(self) -> None:

@@ -47,6 +47,7 @@ class ExtensionDescriptor:
     api_version: int
     stability: ExtensionStability = 'stable'
     implementation: str = ''
+    cxp_interface: str | None = None
     published_capabilities: tuple[str, ...] = field(default_factory=tuple)
     compatibility: tuple[ExtensionCompatibilityConstraint, ...] = field(
         default_factory=tuple,
@@ -112,6 +113,7 @@ def build_engine_extension_snapshot(
             api_version=engine.engine_api_version(),
             stability=engine.engine_stability(),
             implementation=_build_implementation_name(engine.__class__),
+            cxp_interface='cosecha/engine',
             published_capabilities=_capability_names(descriptors),
             compatibility=compatibility,
         ),
@@ -169,6 +171,7 @@ def build_reporter_extension_snapshot(
             implementation=_build_implementation_name(
                 descriptor_reporter.__class__,
             ),
+            cxp_interface='cosecha/reporter',
             compatibility=compatibility,
         ),
     )
@@ -196,6 +199,7 @@ def build_plugin_extension_snapshot(
             api_version=plugin.plugin_api_version(),
             stability=plugin.plugin_stability(),
             implementation=_build_implementation_name(plugin.__class__),
+            cxp_interface='cosecha/plugin',
             published_capabilities=_capability_names(descriptors),
             compatibility=tuple(compatibility),
             surfaces=plugin.provided_surfaces(),

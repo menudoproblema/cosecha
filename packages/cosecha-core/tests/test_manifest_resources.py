@@ -29,15 +29,15 @@ path = "tests"
 
 [[resources]]
 name = "seed"
-provider = "cosecha.resource.mongo:MongoResourceProvider"
+provider = "cosecha.provider.mongodb:MongoResourceProvider"
 scope = "run"
 mode = "ephemeral"
-backend_kind = "mock"
+backend = "mock"
 database_name = "seed_db"
 
 [[resources]]
 name = "mongo"
-provider = "cosecha.resource.mongo:MongoResourceProvider"
+provider = "cosecha.provider.mongodb:MongoResourceProvider"
 scope = "run"
 mode = "ephemeral"
 depends_on = ["seed"]
@@ -46,7 +46,7 @@ initialization_mode = "state_snapshot"
 initialization_timeout_seconds = 12.5
 
 [resources.config]
-backend_kind = "standalone"
+backend = "standalone"
 database_prefix = "suite"
 cleanup_policy = "drop"
 
@@ -77,7 +77,7 @@ fixture_name = "mongo"
     requirement = mongo_spec.build_requirement(root_path=tmp_path)
 
     assert mongo_spec.config == {
-        'backend_kind': 'standalone',
+        'backend': 'standalone',
         'database_prefix': 'suite',
         'cleanup_policy': 'drop',
     }

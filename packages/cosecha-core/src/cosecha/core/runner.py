@@ -349,6 +349,7 @@ class Runner:
             self._build_resource_event_metadata,
         )
         self._resource_manager.bind_telemetry_stream(self.telemetry_stream)
+        self._reporting_coordinator.bind_telemetry_stream(self.telemetry_stream)
         self._runtime_provider = runtime_provider or LocalRuntimeProvider()
         self._runtime_provider.initialize(config)
         self._scheduler = ExecutionScheduler(
@@ -1312,6 +1313,30 @@ class Runner:
             'test_class': node.test.__class__.__name__,
             'test_name': snapshot.test_name,
             'test_path': snapshot.test_path,
+            'cosecha.engine.name': snapshot.engine_name,
+            'cosecha.node.id': snapshot.id,
+            'cosecha.node.stable_id': snapshot.stable_id,
+        }
+
+    def _build_cxp_engine_attributes(
+        self,
+        engine_name: str,
+        operation_name: str,
+        *,
+        outcome: str = 'success',
+    ) -> dict[str, object]:
+        return {
+            'cosecha.engine.name': engine_name,
+            'cosecha.operation.name': operation_name,
+            'cosecha.outcome': outcome,
+        }
+
+    def _build_cxp_plugin_attributes(
+        self,
+        plugin,
+    ) -> dict[str, object]:
+        return {
+            'cosecha.plugin.name': plugin.plugin_name(),
         }
 
     def _build_domain_event_metadata(
@@ -1439,12 +1464,21 @@ class Runner:
         attributes: dict[str, object],
     ) -> float:
         phase_start = time.perf_counter()
+        phase_attributes = attributes | {
+            'cosecha.operation.name': 'test.phase',
+            'cosecha.phase': name,
+            'cosecha.outcome': 'success',
+        }
         async with self.telemetry_stream.span(
-            f'test.{name}',
+            'engine.test.phase',
             parent_span_id=parent_span_id,
-            attributes=attributes | {'phase': name},
+            attributes=phase_attributes,
         ):
-            await callback()
+            try:
+                await callback()
+            except Exception:
+                phase_attributes['cosecha.outcome'] = 'failure'
+                raise
         return time.perf_counter() - phase_start
 
     async def _finish_engine_test(
@@ -1453,37 +1487,93 @@ class Runner:
         test: TestItem,
         report,
     ) -> None:
-        supports_report = self._supports_finish_test_report(engine)
-        if supports_report:
-            await engine.finish_test(test, report)
-            return
+        attributes = self._build_cxp_engine_attributes(
+            engine.name,
+            'test.finish',
+        ) | {
+            'cosecha.node.id': getattr(test, 'id', None) or '',
+            'cosecha.node.stable_id': getattr(test, 'stable_id', None) or '',
+        }
+        async with self.telemetry_stream.span(
+            'engine.test.finish',
+            attributes=attributes,
+        ):
+            try:
+                supports_report = self._supports_finish_test_report(engine)
+                if supports_report:
+                    await engine.finish_test(test, report)
+                    return
 
-        await engine.finish_test(test)
+                await engine.finish_test(test)
+            except Exception:
+                attributes['cosecha.outcome'] = 'failure'
+                raise
 
     async def _start_engine_test(
         self,
         engine: Engine,
         test: TestItem,
     ) -> None:
-        await self._reporting_coordinator.record_engine_test_start(
-            engine,
-            test,
-        )
-        await engine.start_test(test)
+        attributes = self._build_cxp_engine_attributes(
+            engine.name,
+            'test.start',
+        ) | {
+            'cosecha.node.id': getattr(test, 'id', None) or '',
+            'cosecha.node.stable_id': getattr(test, 'stable_id', None) or '',
+        }
+        async with self.telemetry_stream.span(
+            'engine.test.start',
+            attributes=attributes,
+        ):
+            try:
+                await self._reporting_coordinator.record_engine_test_start(
+                    engine,
+                    test,
+                )
+                await engine.start_test(test)
+            except Exception:
+                attributes['cosecha.outcome'] = 'failure'
+                raise
 
     async def _start_engine_session(
         self,
         engine: Engine,
     ) -> None:
-        await self._reporting_coordinator.start_engine_reporter(engine)
-        await engine.start_session()
+        attributes = self._build_cxp_engine_attributes(
+            engine.name,
+            'session.start',
+        )
+        async with self.telemetry_stream.span(
+            'engine.session.start',
+            attributes=attributes,
+        ):
+            try:
+                await self._reporting_coordinator.start_engine_reporter(engine)
+                await engine.start_session()
+            except Exception:
+                attributes['cosecha.outcome'] = 'failure'
+                raise
 
     async def _finish_engine_session(
         self,
         engine: Engine,
     ) -> None:
-        await self._reporting_coordinator.finish_engine_reporter(engine)
-        await engine.finish_session()
+        attributes = self._build_cxp_engine_attributes(
+            engine.name,
+            'session.finish',
+        )
+        async with self.telemetry_stream.span(
+            'engine.session.finish',
+            attributes=attributes,
+        ):
+            try:
+                await self._reporting_coordinator.finish_engine_reporter(
+                    engine,
+                )
+                await engine.finish_session()
+            except Exception:
+                attributes['cosecha.outcome'] = 'failure'
+                raise
 
     def _supports_finish_test_report(self, engine: Engine) -> bool:
         engine_type = type(engine)
@@ -1576,6 +1666,7 @@ class Runner:
             self._build_resource_event_metadata,
         )
         self._resource_manager.bind_telemetry_stream(self.telemetry_stream)
+        self._reporting_coordinator.bind_telemetry_stream(self.telemetry_stream)
 
     async def _start_plugins(self) -> None:
         available_capability_names = self._available_plugin_capability_names()
@@ -1601,15 +1692,27 @@ class Runner:
                 ),
                 session_report_state=self._session_report_state,
             )
-            # Inicializamos cada plugin con la configuracion efectiva.
-            await plugin.initialize(plugin_context)
+            init_attributes = self._build_cxp_plugin_attributes(plugin)
+            async with self.telemetry_stream.span(
+                'plugin.initialize',
+                attributes=init_attributes,
+            ):
+                try:
+                    # Inicializamos cada plugin con la configuracion efectiva.
+                    await plugin.initialize(plugin_context)
+                except Exception:
+                    raise
 
             # Registramos el plugin antes de arrancarlo para poder intentar su
             # cierre incluso si `start()` falla a mitad del proceso.
             self._started_plugins.append(plugin)
 
             # Arrancamos el plugin antes de comenzar la recoleccion.
-            await plugin.start()
+            async with self.telemetry_stream.span(
+                'plugin.start',
+                attributes=self._build_cxp_plugin_attributes(plugin),
+            ):
+                await plugin.start()
 
     def _available_plugin_capability_names(self) -> set[str]:
         capability_names: set[str] = set()
@@ -1674,19 +1777,31 @@ class Runner:
         async def _collect_engine(engine: Engine) -> None:
             engine.bind_session_timing(self.session_timing)
             engine.bind_domain_event_stream(self._domain_event_stream)
-            if excluded_paths:
-                await engine.collect(collect_paths, excluded_paths)
-                return
+            attributes = self._build_cxp_engine_attributes(
+                engine.name,
+                'collect',
+            )
+            async with self.telemetry_stream.span(
+                'engine.collect',
+                attributes=attributes,
+            ):
+                try:
+                    if excluded_paths:
+                        await engine.collect(collect_paths, excluded_paths)
+                        return
 
-            if collect_paths is None:
-                await engine.collect()
-                return
+                    if collect_paths is None:
+                        await engine.collect()
+                        return
 
-            if len(collect_paths) == 1:
-                await engine.collect(collect_paths[0])
-                return
+                    if len(collect_paths) == 1:
+                        await engine.collect(collect_paths[0])
+                        return
 
-            await engine.collect(collect_paths)
+                    await engine.collect(collect_paths)
+                except Exception:
+                    attributes['cosecha.outcome'] = 'failure'
+                    raise
 
         try:
             # Iniciamos la recoleccion de tests mediante los motores.
@@ -1835,12 +1950,17 @@ class Runner:
         ):
             phase_start = time.perf_counter()
             try:
-                # Cerramos los plugins cuando runtime y recursos ya
-                # expusieron el estado final observable de la sesion.
+                async with self.telemetry_stream.span(
+                    'plugin.finish',
+                    attributes=self._build_cxp_plugin_attributes(plugin),
+                ):
+                    await plugin.finish()
+                # Conservamos tambien el span legacy de shutdown para no
+                # cambiar de golpe la telemetria interna ya existente.
                 async with self.telemetry_stream.span(
                     f'shutdown.plugin.{plugin.__class__.__name__}',
                 ):
-                    await plugin.finish()
+                    pass
             except Exception as error:
                 if first_error is None:
                     first_error = error
@@ -1849,18 +1969,6 @@ class Runner:
                     f'plugin_finish:{plugin.__class__.__name__}',
                     time.perf_counter() - phase_start,
                 )
-
-        phase_start = time.perf_counter()
-        try:
-            await self.telemetry_stream.close()
-        except Exception as error:
-            if first_error is None:
-                first_error = error
-        if st is not None:
-            st.record_shutdown_phase(
-                'telemetry_stream_close',
-                time.perf_counter() - phase_start,
-            )
 
         plugins_after_close = tuple(
             sorted(
@@ -1902,7 +2010,23 @@ class Runner:
         self._persist_session_artifact()
 
         for plugin in plugins_after_close:
-            await plugin.after_session_closed()
+            async with self.telemetry_stream.span(
+                'plugin.after_session_closed',
+                attributes=self._build_cxp_plugin_attributes(plugin),
+            ):
+                await plugin.after_session_closed()
+
+        phase_start = time.perf_counter()
+        try:
+            await self.telemetry_stream.close()
+        except Exception as error:
+            if first_error is None:
+                first_error = error
+        if st is not None:
+            st.record_shutdown_phase(
+                'telemetry_stream_close',
+                time.perf_counter() - phase_start,
+            )
 
         # Limpiamos el estado interno aunque algun cierre haya fallado.
         self._domain_event_node_stable_ids.clear()
@@ -2277,9 +2401,13 @@ class Runner:
                     ),
                     snapshot_kind='pytest_runtime',
                 )
+                execute_attributes = node_attributes | {
+                    'cosecha.operation.name': 'test.execute',
+                    'cosecha.outcome': 'success',
+                }
                 async with self.telemetry_stream.span(
-                    'test.execute',
-                    attributes=node_attributes,
+                    'engine.test.execute',
+                    attributes=execute_attributes,
                 ) as test_span_id:
                     try:
                         if test.status not in {
@@ -2306,6 +2434,9 @@ class Runner:
                                 ):
                                     test.status = TestResultStatus.ERROR
                                     test.message = 'Error starting test'
+                                execute_attributes[
+                                    'cosecha.outcome'
+                                ] = 'failure'
                                 if test.failure_kind is None:
                                     test.failure_kind = resolve_failure_kind(
                                         error,

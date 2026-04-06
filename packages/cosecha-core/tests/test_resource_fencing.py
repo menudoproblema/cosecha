@@ -9,6 +9,7 @@ from cosecha.core.resources import (
     ResourceError,
     ResourceManager,
     ResourceRequirement,
+    validate_resource_requirements,
 )
 from cosecha.core.runtime import ProcessRuntimeProvider
 
@@ -103,6 +104,79 @@ class _ReservedHandleBrokenProvider(_ReservedHandleProvider):
         del requirement, mode
         msg = 'acquire failed'
         raise RuntimeError(msg)
+
+
+class _DependencyAwareProvider(_FakeProvider):
+    def __init__(self) -> None:
+        self.observed_dependency = None
+        self.observed_names: tuple[str, ...] = ()
+
+    def acquire(self, requirement, *, mode, dependency_context):
+        del mode
+        self.observed_names = dependency_context.names()
+        self.observed_dependency = dependency_context.require(
+            'seed',
+            requirement_name=requirement.name,
+        )
+        return {
+            'handle': 'resource-2',
+            'seed': self.observed_dependency,
+        }
+
+
+class _CapabilitySeedProvider(_FakeProvider):
+    def describe_capabilities(self, resource, requirement, *, mode):
+        del resource, requirement, mode
+        return {'kind': 'seed'}
+
+
+class _CapabilityAwareProvider(_FakeProvider):
+    def validate_dependency_capabilities(
+        self,
+        requirement,
+        *,
+        mode,
+        dependency_context,
+    ):
+        del mode
+        if dependency_context.get_capabilities('seed').get('kind') == 'seed':
+            return
+        msg = 'missing seed capability'
+        raise ResourceError(
+            requirement.name,
+            msg,
+            code='missing_seed_capability',
+            unhealthy=False,
+        )
+
+
+class _ImplicitDependencyAwareProvider(_FakeProvider):
+    def resolve_dependency_names(self, requirement, *, mode):
+        del requirement, mode
+        return ('seed',)
+
+    def acquire(self, requirement, *, mode, dependency_context):
+        del mode
+        return {
+            'handle': 'resource-3',
+            'seed': dependency_context.require(
+                'seed',
+                requirement_name=requirement.name,
+            ),
+        }
+
+
+class _LegacyImplicitDependencyProvider(_FakeProvider):
+    def resolve_dependency_names(self, requirement):
+        del requirement
+        return ('seed',)
+
+
+class _BrokenImplicitDependencyProvider(_FakeProvider):
+    def resolve_dependency_names(self, requirement, *, mode):
+        del requirement, mode
+        msg = 'internal bug from provider'
+        raise TypeError(msg)
 
 
 @pytest.mark.asyncio
@@ -238,6 +312,122 @@ async def test_resource_manager_discards_reserved_handle_when_acquire_fails(
         ('pending_cleared', 'mongo', 'test', 'reserved-1'),
     ]
     assert provider.discarded_handles == ['reserved-1']
+
+
+@pytest.mark.asyncio
+async def test_resource_manager_passes_materialized_dependencies_to_provider(
+) -> None:
+    manager = ResourceManager()
+    dependency_provider = _FakeProvider()
+    consumer_provider = _DependencyAwareProvider()
+
+    seed_requirement = ResourceRequirement(
+        name='seed',
+        provider=dependency_provider,
+        scope='test',
+    )
+    consumer_requirement = ResourceRequirement(
+        name='mongo',
+        provider=consumer_provider,
+        scope='test',
+        depends_on=('seed',),
+    )
+
+    acquired = await manager.acquire_for_test(
+        'test-1',
+        (seed_requirement, consumer_requirement),
+    )
+
+    assert consumer_provider.observed_names == ('seed',)
+    assert consumer_provider.observed_dependency == {'handle': 'resource-1'}
+    assert acquired['mongo'] == {
+        'handle': 'resource-2',
+        'seed': {'handle': 'resource-1'},
+    }
+
+
+@pytest.mark.asyncio
+async def test_resource_manager_validates_dependency_capabilities(
+) -> None:
+    manager = ResourceManager()
+
+    seed_requirement = ResourceRequirement(
+        name='seed',
+        provider=_CapabilitySeedProvider(),
+        scope='test',
+    )
+    consumer_requirement = ResourceRequirement(
+        name='mongo',
+        provider=_CapabilityAwareProvider(),
+        scope='test',
+        depends_on=('seed',),
+    )
+
+    acquired = await manager.acquire_for_test(
+        'test-1',
+        (seed_requirement, consumer_requirement),
+    )
+
+    assert acquired['mongo'] == {'handle': 'resource-1'}
+
+
+@pytest.mark.asyncio
+async def test_resource_manager_orders_provider_declared_dependencies(
+) -> None:
+    manager = ResourceManager()
+
+    seed_requirement = ResourceRequirement(
+        name='seed',
+        provider=_FakeProvider(),
+        scope='test',
+    )
+    consumer_requirement = ResourceRequirement(
+        name='mongo',
+        provider=_ImplicitDependencyAwareProvider(),
+        scope='test',
+    )
+
+    acquired = await manager.acquire_for_test(
+        'test-1',
+        (seed_requirement, consumer_requirement),
+    )
+
+    assert acquired['mongo'] == {
+        'handle': 'resource-3',
+        'seed': {'handle': 'resource-1'},
+    }
+
+
+def test_validate_resource_requirements_accepts_legacy_dependency_resolver(
+) -> None:
+    requirement = ResourceRequirement(
+        name='mongo',
+        provider=_LegacyImplicitDependencyProvider(),
+        scope='test',
+    )
+    seed_requirement = ResourceRequirement(
+        name='seed',
+        provider=_FakeProvider(),
+        scope='test',
+    )
+
+    validated = validate_resource_requirements(
+        (seed_requirement, requirement),
+    )
+
+    assert validated == (seed_requirement, requirement)
+
+
+def test_validate_resource_requirements_preserves_dependency_resolver_errors(
+) -> None:
+    requirement = ResourceRequirement(
+        name='mongo',
+        provider=_BrokenImplicitDependencyProvider(),
+        scope='test',
+    )
+
+    with pytest.raises(TypeError, match='internal bug from provider'):
+        validate_resource_requirements((requirement,))
 
 
 def test_process_runtime_provider_reports_pending_resource_window(
