@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha-provider-ssl"
+dynamic = ["version"]
+description = "Cosecha SSL/TLS Materials Provider"
+requires-python = ">=3.13"
+dependencies = [
+    "cosecha-core",
+    "cryptography==46.0.6",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha.provider.ssl._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true

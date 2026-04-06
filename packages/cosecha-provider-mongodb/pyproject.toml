@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha-provider-mongodb"
+dynamic = ["version"]
+description = "Cosecha MongoDB Provider"
+requires-python = ">=3.13"
+dependencies = [
+    "cosecha-core",
+    "mongoeco>=3.2.0",
+    "pymongo>=4.16.0",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha.provider.mongodb._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true

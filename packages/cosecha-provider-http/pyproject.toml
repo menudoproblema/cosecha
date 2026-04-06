@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha-provider-http"
+dynamic = ["version"]
+description = "Cosecha HTTP Providers"
+requires-python = ">=3.13"
+dependencies = [
+    "cosecha-core",
+]
+
+[project.optional-dependencies]
+uvicorn = [
+    "uvicorn==0.43.0",
+]
+hypercorn = [
+    "hypercorn==0.17.3",
+]
+standalone = [
+    "uvicorn==0.43.0",
+]
+full = [
+    "uvicorn==0.43.0",
+    "hypercorn==0.17.3",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha.provider.http._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true

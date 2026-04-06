@@ -24,7 +24,7 @@ No es dueño de:
 - `src/cosecha/shell/runner_cli.py`
 - `src/cosecha/shell/mochuelo_runtime.py`
 - `packages/cosecha-lsp/src/cosecha_lsp/lsp_server.py` como paquete
-  separado para tooling de LSP
+  separado para tooling de LSP, expuesto con `cosecha-lsp`
 
 ## Mapa local
 
@@ -44,6 +44,10 @@ paquetes.
 
 Extras agregados del metapaquete:
 
+- `http`: `cosecha-provider-http`
+- `http-uvicorn`: `cosecha-provider-http[uvicorn]`
+- `http-hypercorn`: `cosecha-provider-http[hypercorn]`
+- `ssl`: `cosecha-provider-ssl`
 - `all`: engines + plugins + reporters + providers
 - `devtools`: `cosecha-lsp`, `cosecha-mcp`
 - `full`: `all` + `devtools`

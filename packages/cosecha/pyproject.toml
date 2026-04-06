@@ -30,7 +30,7 @@ junit = [
     "cosecha-reporter-junit",
 ]
 mongo = [
-    "cosecha-resource-mongo",
+    "cosecha-provider-mongodb",
 ]
 coverage = [
     "cosecha-plugin-coverage",
@@ -44,11 +44,25 @@ lsp = [
 mcp = [
     "cosecha-mcp",
 ]
+http = [
+    "cosecha-provider-http",
+]
+http-uvicorn = [
+    "cosecha-provider-http[uvicorn]",
+]
+http-hypercorn = [
+    "cosecha-provider-http[hypercorn]",
+]
+ssl = [
+    "cosecha-provider-ssl",
+]
 all = [
     "cosecha-engine-gherkin",
     "cosecha-reporter-json",
     "cosecha-reporter-junit",
-    "cosecha-resource-mongo",
+    "cosecha-provider-http[uvicorn]",
+    "cosecha-provider-mongodb",
+    "cosecha-provider-ssl",
     "cosecha-plugin-coverage",
     "cosecha-plugin-timing",
 ]
@@ -60,7 +74,9 @@ full = [
     "cosecha-engine-gherkin",
     "cosecha-reporter-json",
     "cosecha-reporter-junit",
-    "cosecha-resource-mongo",
+    "cosecha-provider-http[uvicorn]",
+    "cosecha-provider-mongodb",
+    "cosecha-provider-ssl",
     "cosecha-plugin-coverage",
     "cosecha-plugin-timing",
     "cosecha-lsp",
