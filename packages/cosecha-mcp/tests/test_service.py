@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
+import threading
 
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,6 +14,7 @@ from cosecha.core.knowledge_base import TestKnowledge as CoreTestKnowledge
 from cosecha_mcp.service import CosechaMcpService
 from cosecha_mcp.workspace import CosechaWorkspacePaths
 
+
 OTHER_PYTHON = '/tmp/other-python'
 PROJECT_ROOT = Path('/tmp/project')
 PROJECT_TESTS_ROOT = PROJECT_ROOT / 'tests'
@@ -20,33 +23,49 @@ RUNNER_TEST_LIMIT = 5
 NO_SUBPROCESS_MESSAGE = 'query_tests should not use subprocess'
 
 
-def _build_workspace(tmp_path: Path) -> CosechaWorkspacePaths:
-    project_path = tmp_path / 'project'
-    root_path = project_path / 'tests'
-    kb_path = root_path / '.cosecha' / 'kb.db'
-    root_path.mkdir(parents=True)
-    kb_path.parent.mkdir(parents=True)
-    kb_path.write_text('', encoding='utf-8')
-    return CosechaWorkspacePaths(
-        project_path=project_path,
-        root_path=root_path,
+def _run_async(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    payload: dict[str, object] = {}
+    error: dict[str, BaseException] = {}
+
+    def _run_in_thread() -> None:
+        try:
+            payload['result'] = asyncio.run(coro)
+        except BaseException as exc:  # pragma: no cover
+            error['exception'] = exc
+
+    thread = threading.Thread(target=_run_in_thread)
+    thread.start()
+    thread.join()
+
+    if 'exception' in error:
+        raise error['exception']
+
+    return payload['result']
+
+
+def _build_workspace(cosecha_workspace):
+    cosecha_workspace.write_project_file('tests/.cosecha/kb.db', '')
+    workspace_paths = CosechaWorkspacePaths(
+        project_path=cosecha_workspace.project_path,
+        root_path=cosecha_workspace.project_path / 'tests',
         manifest_path=None,
-        knowledge_base_path=kb_path,
+        knowledge_base_path=(
+            cosecha_workspace.project_path / 'tests/.cosecha/kb.db'
+        ),
     )
+    return workspace_paths, cosecha_workspace
 
 
 def test_service_discovers_workspace_import_paths(
-    tmp_path: Path,
+    cosecha_workspace,
 ) -> None:
-    workspace = _build_workspace(tmp_path)
-    version_name = f'python{sys.version_info.major}.{sys.version_info.minor}'
-    project_site_packages = (
-        workspace.project_path
-        / '.venv'
-        / 'lib'
-        / version_name
-        / 'site-packages'
-    )
+    workspace, handle = _build_workspace(cosecha_workspace)
+    project_site_packages = handle.site_packages_path
     sibling_src = workspace.project_path.parent / 'shared-lib' / 'src'
     project_site_packages.mkdir(parents=True)
     sibling_src.mkdir(parents=True)
@@ -64,10 +83,10 @@ def test_service_discovers_workspace_import_paths(
 
 
 def test_service_prefers_matching_workspace_python(
-    tmp_path: Path,
+    cosecha_workspace,
 ) -> None:
-    workspace = _build_workspace(tmp_path)
-    candidate = tmp_path / '.venv' / 'bin' / 'python'
+    workspace, _handle = _build_workspace(cosecha_workspace)
+    candidate = workspace.project_path / '.venv' / 'bin' / 'python'
     candidate.parent.mkdir(parents=True)
     candidate.write_text('', encoding='utf-8')
 
@@ -89,10 +108,10 @@ def test_service_prefers_matching_workspace_python(
 
 
 def test_service_rejects_workspace_python_version_mismatch(
-    tmp_path: Path,
+    cosecha_workspace,
 ) -> None:
-    workspace = _build_workspace(tmp_path)
-    candidate = tmp_path / '.venv' / 'bin' / 'python'
+    workspace, _handle = _build_workspace(cosecha_workspace)
+    candidate = workspace.project_path / '.venv' / 'bin' / 'python'
     candidate.parent.mkdir(parents=True)
     candidate.write_text('', encoding='utf-8')
 
@@ -115,10 +134,10 @@ def test_service_rejects_workspace_python_version_mismatch(
 
 
 def test_build_workspace_subprocess_env_is_minimal_outside_monorepo(
-    tmp_path: Path,
+    cosecha_workspace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = _build_workspace(tmp_path)
+    workspace, _handle = _build_workspace(cosecha_workspace)
     monkeypatch.setenv('PYTHONPATH', '/existing/path')
 
     class TestableService(CosechaMcpService):
@@ -142,9 +161,9 @@ def test_build_workspace_subprocess_env_is_minimal_outside_monorepo(
 
 
 def test_build_workspace_subprocess_env_includes_repo_sources_in_monorepo_checkout(
-    tmp_path: Path,
+    cosecha_workspace,
 ) -> None:
-    workspace = _build_workspace(tmp_path)
+    workspace, _handle = _build_workspace(cosecha_workspace)
     service = CosechaMcpService()
 
     env = service._build_workspace_subprocess_env(
@@ -159,8 +178,7 @@ def test_build_workspace_subprocess_env_includes_repo_sources_in_monorepo_checko
     )
 
 
-@pytest.mark.asyncio
-async def test_service_run_tests_requires_explicit_opt_in(
+def test_service_run_tests_requires_explicit_opt_in(
 ) -> None:
     service = CosechaMcpService()
 
@@ -168,11 +186,10 @@ async def test_service_run_tests_requires_explicit_opt_in(
         PermissionError,
         match='run_tests is disabled by default',
     ):
-        await service.run_tests()
+        _run_async(service.run_tests())
 
 
-@pytest.mark.asyncio
-async def test_service_run_tests_uses_subprocess_response_and_serializes_result(
+def test_service_run_tests_uses_subprocess_response_and_serializes_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = CosechaWorkspacePaths(
@@ -211,12 +228,14 @@ async def test_service_run_tests_uses_subprocess_response_and_serializes_result(
             return {'exists': True}
 
     service = TestableService()
-    payload = await service.run_tests(
-        paths=['tests/unit/example.feature'],
-        selection_labels=['slow'],
-        test_limit=RUNNER_TEST_LIMIT,
-        selected_engines=['gherkin'],
-        start_path=str(PROJECT_ROOT),
+    payload = _run_async(
+        service.run_tests(
+            paths=['tests/unit/example.feature'],
+            selection_labels=['slow'],
+            test_limit=RUNNER_TEST_LIMIT,
+            selected_engines=['gherkin'],
+            start_path=str(PROJECT_ROOT),
+        ),
     )
 
     assert captured['paths'] == ('unit/example.feature',)
@@ -249,11 +268,10 @@ def test_service_compacts_large_event_payloads() -> None:
     assert payload['next_after_sequence_number'] >= 0
 
 
-@pytest.mark.asyncio
-async def test_query_tests_reads_persistent_knowledge_without_subprocess(
-    tmp_path: Path,
+def test_query_tests_reads_persistent_knowledge_without_subprocess(
+    cosecha_workspace,
 ) -> None:
-    workspace = _build_workspace(tmp_path)
+    workspace, _handle = _build_workspace(cosecha_workspace)
     fake_tests = (
         CoreTestKnowledge(
             node_id='node-1',
@@ -284,13 +302,19 @@ async def test_query_tests_reads_persistent_knowledge_without_subprocess(
 
             yield FakeKnowledgeBase()
 
-        async def _execute_runner_operation_in_subprocess(self, *args, **kwargs):
-            raise AssertionError('query_tests should not use subprocess')
+        async def _execute_runner_operation_in_subprocess(
+            self,
+            *args,
+            **kwargs,
+        ):
+            raise AssertionError(NO_SUBPROCESS_MESSAGE)
 
     service = TestableService()
-    payload = await service.query_tests(
-        engine_name='gherkin',
-        start_path=str(workspace.project_path),
+    payload = _run_async(
+        service.query_tests(
+            engine_name='gherkin',
+            start_path=str(workspace.project_path),
+        ),
     )
 
     assert payload['result_type'] == 'knowledge.tests'

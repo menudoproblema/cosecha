@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from cosecha.core.runtime_profiles import build_runtime_canonical_binding_name
+from cosecha.engine.pytest import resource_bridge_plugin
 
 
 try:  # pragma: no cover
@@ -304,73 +304,6 @@ def _temporary_runtime_root(root_path: Path):
                 sys.path.remove(str(resolved_root_path))
 
 
-def _build_resource_bridge_plugin(
-    resource_bindings: tuple[ResourceBindingSpec, ...],
-    resources: dict[str, object],
-) -> object | None:
-    if pytest is None:
-        return None
-
-    fixture_bindings = tuple(
-        binding
-        for binding in resource_bindings
-        if binding.fixture_name is not None
-        and binding.resource_name in resources
-    )
-    canonical_bindings = tuple(
-        (
-            build_runtime_canonical_binding_name(resource_name),
-            resource_name,
-        )
-        for resource_name in resources
-    )
-    if not fixture_bindings and not canonical_bindings:
-        return None
-
-    plugin_attributes: dict[str, object] = {}
-
-    for index, binding in enumerate(fixture_bindings):
-        fixture_name = binding.fixture_name
-        if fixture_name is None:
-            continue
-
-        @pytest.fixture(name=fixture_name)
-        def _resource_fixture(
-            _request=None,
-            *,
-            _resources=resources,
-            _resource_name=binding.resource_name,
-        ):
-            del _request
-            return _resources[_resource_name]
-
-        plugin_attributes[f'_resource_fixture_{index}'] = _resource_fixture
-
-    offset = len(plugin_attributes)
-    for index, (fixture_name, resource_name) in enumerate(canonical_bindings):
-
-        @pytest.fixture(name=fixture_name)
-        def _canonical_resource_fixture(
-            _request=None,
-            *,
-            _resources=resources,
-            _resource_name=resource_name,
-        ):
-            del _request
-            return _resources[_resource_name]
-
-        plugin_attributes[f'_canonical_resource_fixture_{offset + index}'] = (
-            _canonical_resource_fixture
-        )
-
-    plugin_type = type(
-        '_PytestRuntimeResourceBridgePlugin',
-        (),
-        plugin_attributes,
-    )
-    return plugin_type()
-
-
 @contextlib.contextmanager
 def _temporary_request_resource_bridge(
     resources: dict[str, object],
@@ -430,21 +363,28 @@ def run_pytest_runtime_batch_in_process(
         }
 
     plugin = _PytestRuntimeCapturePlugin(nodeids)
-    plugins: list[object] = [plugin]
-    resource_bridge_plugin = _build_resource_bridge_plugin(
-        resource_bindings,
-        resources or {},
-    )
-    if resource_bridge_plugin is not None:
-        plugins.append(resource_bridge_plugin)
+    plugins: list[object] = [
+        plugin,
+        resource_bridge_plugin,
+    ]
 
     with _temporary_runtime_root(
         root_path,
+    ), resource_bridge_plugin.temporary_resource_bindings(
+        resource_bindings,
+    ), resource_bridge_plugin.temporary_active_resource_bridge(
+        resources or {},
     ), _temporary_request_resource_bridge(
         resources or {},
     ):
         pytest.main(
-            ['-q', '--disable-warnings', *nodeids],
+            [
+                '-p',
+                'no:cosecha_resource_bridge',
+                '-q',
+                '--disable-warnings',
+                *nodeids,
+            ],
             plugins=plugins,
         )
 

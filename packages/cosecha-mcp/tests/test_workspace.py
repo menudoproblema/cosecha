@@ -26,17 +26,15 @@ from cosecha_mcp.workspace import (
 
 
 def test_resolve_cosecha_workspace_prefers_tests_root(
-    tmp_path: Path,
+    cosecha_workspace,
 ) -> None:
-    tests_root = tmp_path / 'tests'
-    tests_root.mkdir()
-    (tests_root / 'cosecha.toml').write_text('', encoding='utf-8')
-    (tests_root / '.cosecha').mkdir()
-    (tests_root / '.cosecha' / 'kb.db').write_text('', encoding='utf-8')
+    tests_root = cosecha_workspace.project_path / 'tests'
+    cosecha_workspace.write_project_file('tests/cosecha.toml', '')
+    cosecha_workspace.write_project_file('tests/.cosecha/kb.db', '')
 
-    workspace = resolve_cosecha_workspace(tmp_path)
+    workspace = resolve_cosecha_workspace(cosecha_workspace.project_path)
 
-    assert workspace.project_path == tmp_path.resolve()
+    assert workspace.project_path == cosecha_workspace.project_path.resolve()
     assert workspace.root_path == tests_root.resolve()
     assert workspace.manifest_path == (tests_root / 'cosecha.toml').resolve()
     assert workspace.knowledge_base_path == (
@@ -45,19 +43,20 @@ def test_resolve_cosecha_workspace_prefers_tests_root(
 
 
 def test_resolve_cosecha_workspace_supports_root_layout(
-    tmp_path: Path,
+    cosecha_workspace,
 ) -> None:
-    (tmp_path / 'cosecha.toml').write_text('', encoding='utf-8')
-    (tmp_path / '.cosecha').mkdir()
-    (tmp_path / '.cosecha' / 'kb.db').write_text('', encoding='utf-8')
+    cosecha_workspace.write_project_file('cosecha.toml', '')
+    cosecha_workspace.write_project_file('.cosecha/kb.db', '')
 
-    workspace = resolve_cosecha_workspace(tmp_path)
+    workspace = resolve_cosecha_workspace(cosecha_workspace.project_path)
 
-    assert workspace.project_path == tmp_path.resolve()
-    assert workspace.root_path == tmp_path.resolve()
-    assert workspace.manifest_path == (tmp_path / 'cosecha.toml').resolve()
+    assert workspace.project_path == cosecha_workspace.project_path.resolve()
+    assert workspace.root_path == cosecha_workspace.project_path.resolve()
+    assert workspace.manifest_path == (
+        cosecha_workspace.project_path / 'cosecha.toml'
+    ).resolve()
     assert workspace.knowledge_base_path == (
-        tmp_path / '.cosecha' / 'kb.db'
+        cosecha_workspace.project_path / '.cosecha' / 'kb.db'
     ).resolve()
 
 

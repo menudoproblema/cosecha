@@ -20,3 +20,15 @@ for member in WORKSPACE_CONFIG['tool']['uv']['workspace']['members']:
     if rendered_path in sys.path:
         continue
     sys.path.insert(0, rendered_path)
+
+from cosecha.engine.pytest import (  # noqa: E402
+    resource_bridge_plugin as _resource_bridge_plugin,
+)
+
+
+def pytest_configure(config) -> None:
+    _resource_bridge_plugin.pytest_configure(config)
+
+
+def pytest_unconfigure(config) -> None:
+    _resource_bridge_plugin.pytest_unconfigure(config)

@@ -21,6 +21,9 @@ dev = [
 [project.entry-points."cosecha.engines"]
 pytest = "cosecha.engine.pytest.discovery:PytestEngineDescriptor"
 
+[project.entry-points.pytest11]
+cosecha_resource_bridge = "cosecha.engine.pytest.resource_bridge_plugin"
+
 [tool.setuptools.dynamic]
 version = {attr = "cosecha.engine.pytest._version.__version__"}
 

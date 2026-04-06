@@ -1,0 +1,25 @@
+[manifest]
+schema_version = 1
+
+[[engines]]
+id = "pytest"
+type = "pytest"
+name = "pytest"
+path = "packages"
+
+[[engines]]
+id = "pytest-internal"
+type = "pytest"
+name = "pytest-internal"
+path = "internal"
+
+[[resources]]
+name = "workspace"
+provider = "cosecha_internal.provider.workspace:CosechaWorkspaceProvider"
+scope = "test"
+mode = "ephemeral"
+
+[[resource_bindings]]
+engine_type = "pytest"
+resource_name = "workspace"
+fixture_name = "cosecha_workspace"

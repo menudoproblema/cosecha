@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha-provider-workspace-internal"
+dynamic = ["version"]
+description = "Internal workspace provider and test helpers for Cosecha"
+requires-python = ">=3.13"
+dependencies = [
+    "cosecha-core",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha_internal.provider.workspace._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
