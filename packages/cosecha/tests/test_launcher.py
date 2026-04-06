@@ -62,7 +62,8 @@ def test_bootstrap_coverage_reexecutes_under_coverage(
         'cosecha.shell.launcher._update_session_artifact',
         lambda metadata, *, summary: recorded.update(
             {'metadata': metadata, 'summary': summary},
-        ),
+        )
+        or (True, None),
     )
     monkeypatch.setattr(
         'cosecha.shell.launcher._render_coverage_summary',
@@ -100,6 +101,39 @@ def test_bootstrap_coverage_reexecutes_under_coverage(
     assert recorded['metadata']['session_id'] == 'session-1'
     assert recorded['summary'].instrumentation_name == 'coverage'
     assert recorded['rendered_summary'].instrumentation_name == 'coverage'
+
+
+def test_bootstrap_coverage_warns_when_summary_is_not_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_run(command, *, check, env):
+        del command, check
+        metadata_path = env['COSECHA_INSTRUMENTATION_METADATA_FILE']
+        with open(metadata_path, 'w', encoding='utf-8') as handle:
+            handle.write(
+                '{"knowledge_base_path": "/tmp/kb.db", "session_id": "session-1"}',
+            )
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr('cosecha.shell.launcher.subprocess.run', fake_run)
+    monkeypatch.setattr(
+        'cosecha.shell.launcher._update_session_artifact',
+        lambda metadata, *, summary: (False, 'session artifact not found'),
+    )
+    monkeypatch.setattr(
+        'cosecha.plugin.coverage.CoverageInstrumenter.collect',
+        lambda self, *, workdir: SimpleNamespace(
+            instrumentation_name='coverage',
+            payload={'total_coverage': 87.5},
+        ),
+    )
+
+    exit_code = _bootstrap_coverage(['run', '--cov', 'src/demo'])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert 'coverage was collected but not persisted' in captured.out
 
 
 def test_launcher_main_delegates_to_runner_cli_when_no_launcher_matches(

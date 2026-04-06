@@ -85,3 +85,46 @@ def test_collect_builds_instrumentation_summary_from_parallel_data(
     assert summary.payload['report_type'] == 'term-missing'
     assert summary.payload['total_coverage'] > 0.0
     assert str(source_path) in summary.payload['source_targets']
+
+
+def test_collect_respects_branch_from_user_config_when_flag_not_passed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    recorded_kwargs: dict[str, object] = {}
+
+    class _FakeCoverage:
+        def __init__(self, **kwargs) -> None:
+            recorded_kwargs.update(kwargs)
+            self.config = type(
+                '_Config',
+                (),
+                {
+                    'branch': True,
+                    'source': (str(tmp_path / 'demo_pkg'),),
+                },
+            )()
+
+        def combine(self, *, data_paths) -> None:
+            assert data_paths == [str(tmp_path)]
+
+        def save(self) -> None:
+            return None
+
+        def report(self, **kwargs) -> float:
+            del kwargs
+            return 88.0
+
+    monkeypatch.setattr(
+        'cosecha.plugin.coverage.coverage.Coverage',
+        _FakeCoverage,
+    )
+
+    instrumenter = CoverageInstrumenter(
+        CoverageRequest(source_targets=(str(tmp_path / 'demo_pkg'),)),
+    )
+
+    summary = instrumenter.collect(workdir=tmp_path)
+
+    assert 'branch' not in recorded_kwargs
+    assert summary.payload['branch'] is True

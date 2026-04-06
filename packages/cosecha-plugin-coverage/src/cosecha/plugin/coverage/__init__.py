@@ -80,12 +80,14 @@ class CoverageInstrumenter:
 
     def collect(self, *, workdir: Path) -> InstrumentationSummary:
         data_file = workdir / '.coverage'
-        cov = coverage.Coverage(
-            branch=self.request.branch,
-            config_file=True,
-            data_file=str(data_file),
-            source=list(self.request.source_targets) or None,
-        )
+        coverage_kwargs: dict[str, object] = {
+            'config_file': True,
+            'data_file': str(data_file),
+            'source': list(self.request.source_targets) or None,
+        }
+        if self.request.branch:
+            coverage_kwargs['branch'] = True
+        cov = coverage.Coverage(**coverage_kwargs)
         cov.combine(data_paths=[str(workdir)])
         cov.save()
         typed_summary = build_coverage_summary(

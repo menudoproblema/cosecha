@@ -66,14 +66,14 @@ def _update_session_artifact(
     metadata: dict[str, object],
     *,
     summary,
-) -> None:
+) -> tuple[bool, str | None]:
     knowledge_base_path = metadata.get('knowledge_base_path')
     session_id = metadata.get('session_id')
     if not isinstance(knowledge_base_path, str) or not isinstance(
         session_id,
         str,
     ):
-        return
+        return (False, 'session metadata is incomplete')
 
     knowledge_base = PersistentKnowledgeBase(Path(knowledge_base_path))
     try:
@@ -81,11 +81,14 @@ def _update_session_artifact(
             SessionArtifactQuery(session_id=session_id, limit=1),
         )
         if not artifacts:
-            return
+            return (False, f'session artifact not found for {session_id}')
         artifact = artifacts[0]
         report_summary = artifact.report_summary
         if report_summary is None:
-            return
+            return (
+                False,
+                f'session artifact {session_id} has no report summary',
+            )
         updated_report_summary = replace(
             report_summary,
             instrumentation_summaries={
@@ -96,6 +99,7 @@ def _update_session_artifact(
         knowledge_base.store_session_artifact(
             replace(artifact, report_summary=updated_report_summary),
         )
+        return (True, None)
     finally:
         knowledge_base.close()
 
@@ -177,7 +181,15 @@ def _bootstrap_coverage(argv: list[str]) -> int:
 
         try:
             summary = instrumenter.collect(workdir=workdir)
-            _update_session_artifact(metadata, summary=summary)
+            persisted, warning = _update_session_artifact(
+                metadata,
+                summary=summary,
+            )
+            if not persisted and warning is not None:
+                print(
+                    'Coverage warning: coverage was collected but not '
+                    f'persisted ({warning}).',
+                )
             _render_coverage_summary(summary)
         except Exception as error:
             cleanup_workdir = False
