@@ -15,6 +15,7 @@ from cosecha.core.session_artifacts import (
 
 
 if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Sequence
     from pathlib import Path
 
 
@@ -30,6 +31,9 @@ class CoverageInstrumenter:
 
     def __init__(self, request: CoverageRequest) -> None:
         self.request = request
+
+    def strip_bootstrap_options(self, argv: Sequence[str]) -> list[str]:
+        return _strip_coverage_options(argv)
 
     def prepare(self, *, workdir: Path) -> Contribution:
         coverage_module = _coverage_module()
@@ -139,6 +143,25 @@ def parse_coverage_request(
         branch='--cov-branch' in argv,
         report_type=report_type,
     )
+
+
+def _strip_coverage_options(argv: Sequence[str]) -> list[str]:
+    stripped: list[str] = []
+    index = 0
+    while index < len(argv):
+        argument = argv[index]
+        if argument.startswith('--cov=') or argument == '--cov-branch':
+            index += 1
+            continue
+        if argument in {'--cov', '--cov-report'}:
+            index += 2
+            continue
+        if argument.startswith('--cov-report='):
+            index += 1
+            continue
+        stripped.append(argument)
+        index += 1
+    return stripped
 
 
 def build_coverage_summary(

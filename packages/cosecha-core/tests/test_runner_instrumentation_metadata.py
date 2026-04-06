@@ -10,6 +10,7 @@ from cosecha.core.instrumentation import (
 )
 from cosecha.core.session_artifacts import SessionArtifact
 from cosecha.shell.runner_cli import (
+    _build_instrumentation_metadata_payload,
     _write_instrumentation_metadata_from_environment,
 )
 
@@ -60,3 +61,19 @@ def test_write_instrumentation_metadata_file_is_atomic(
     assert ConfigSnapshot.from_dict(payload['config_snapshot']) == (
         artifact.config_snapshot
     )
+
+
+def test_build_instrumentation_metadata_payload_accepts_extra_fields() -> None:
+    artifact = _build_artifact()
+    db_path = Path('/private/tmp/cosecha-kb.db')
+
+    payload = _build_instrumentation_metadata_payload(
+        artifact,
+        db_path,
+        extra_fields={'instrumentation': 'coverage'},
+    )
+
+    assert payload['knowledge_base_path'] == str(db_path)
+    assert payload['root_path'] == artifact.root_path
+    assert payload['session_id'] == artifact.session_id
+    assert payload['instrumentation'] == 'coverage'

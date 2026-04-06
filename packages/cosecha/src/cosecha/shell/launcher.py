@@ -27,27 +27,6 @@ _SESSION_ARTIFACT_RETRY_ATTEMPTS = 3
 _SESSION_ARTIFACT_RETRY_DELAY_SECONDS = 0.05
 
 
-def _strip_coverage_options(argv: list[str]) -> list[str]:
-    stripped: list[str] = []
-    index = 0
-    while index < len(argv):
-        argument = argv[index]
-        if argument.startswith('--cov=') or argument in {
-            '--cov-branch',
-        }:
-            index += 1
-            continue
-        if argument in {'--cov', '--cov-report'}:
-            index += 2
-            continue
-        if argument.startswith('--cov-report='):
-            index += 1
-            continue
-        stripped.append(argument)
-        index += 1
-    return stripped
-
-
 def _run_runner_cli(argv: Sequence[str]) -> int:
     from cosecha.shell import runner_cli
 
@@ -204,7 +183,7 @@ def _bootstrap_coverage(argv: list[str]) -> int:
     if instrumenter is None:
         return _run_runner_cli(argv)
 
-    stripped_argv = _strip_coverage_options(argv)
+    stripped_argv = instrumenter.strip_bootstrap_options(argv)
     workdir = Path(tempfile.mkdtemp(prefix='cosecha-coverage-'))
     cleanup_workdir = True
     try:

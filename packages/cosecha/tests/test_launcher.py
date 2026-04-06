@@ -22,7 +22,6 @@ from cosecha.shell.launcher import (
     _render_coverage_summary,
     _update_session_artifact,
     _should_bootstrap_coverage,
-    _strip_coverage_options,
     main,
 )
 
@@ -37,26 +36,6 @@ def test_should_bootstrap_coverage_only_for_run_commands_with_cov(
 
     monkeypatch.setenv('COSECHA_COVERAGE_ACTIVE', '1')
     assert _should_bootstrap_coverage(['run', '--cov', 'src/demo']) is False
-
-
-def test_strip_coverage_options_removes_bootstrap_flags() -> None:
-    assert _strip_coverage_options(
-        [
-            'run',
-            '--cov',
-            'src/demo',
-            '--cov-report',
-            'term-missing',
-            '--cov-branch',
-            '--path',
-            'tests/unit',
-        ],
-    ) == ['run', '--path', 'tests/unit']
-    assert _strip_coverage_options(
-        ['run', '--cov=src/demo', '--path', 'tests/unit'],
-    ) == ['run', '--path', 'tests/unit']
-
-
 def test_bootstrap_coverage_reexecutes_under_coverage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

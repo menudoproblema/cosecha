@@ -250,6 +250,8 @@ class QueryRenderOptions:
 def _write_instrumentation_metadata_from_environment(
     artifact,
     db_path: Path | None,
+    *,
+    extra_fields: dict[str, object] | None = None,
 ) -> None:
     metadata_path_raw = os.environ.get(
         COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
@@ -258,15 +260,31 @@ def _write_instrumentation_metadata_from_environment(
         return
 
     metadata_path = Path(metadata_path_raw)
-    payload = {
+    payload = _build_instrumentation_metadata_payload(
+        artifact,
+        db_path,
+        extra_fields=extra_fields,
+    )
+    temp_path = metadata_path.with_name(f'{metadata_path.name}.tmp')
+    temp_path.write_text(json.dumps(payload), encoding='utf-8')
+    temp_path.replace(metadata_path)
+
+
+def _build_instrumentation_metadata_payload(
+    artifact,
+    db_path: Path | None,
+    *,
+    extra_fields: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
         'knowledge_base_path': None if db_path is None else str(db_path),
         'root_path': artifact.root_path,
         'session_id': artifact.session_id,
         'config_snapshot': artifact.config_snapshot.to_dict(),
     }
-    temp_path = metadata_path.with_name(f'{metadata_path.name}.tmp')
-    temp_path.write_text(json.dumps(payload), encoding='utf-8')
-    temp_path.replace(metadata_path)
+    if extra_fields:
+        payload.update(extra_fields)
+    return payload
 
 
 @dataclass(slots=True, frozen=True)

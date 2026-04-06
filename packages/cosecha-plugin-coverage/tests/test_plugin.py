@@ -38,6 +38,28 @@ def test_parse_coverage_request_collects_sources_branch_and_report_type(
     )
 
 
+def test_instrumenter_strips_only_coverage_bootstrap_flags() -> None:
+    instrumenter = CoverageInstrumenter(
+        CoverageRequest(source_targets=('src/demo',)),
+    )
+
+    assert instrumenter.strip_bootstrap_options(
+        [
+            'run',
+            '--cov',
+            'src/demo',
+            '--cov-report',
+            'term-missing',
+            '--cov-branch',
+            '--path',
+            'tests/unit',
+        ],
+    ) == ['run', '--path', 'tests/unit']
+    assert instrumenter.strip_bootstrap_options(
+        ['run', '--cov=src/demo', '--path', 'tests/unit'],
+    ) == ['run', '--path', 'tests/unit']
+
+
 def test_prepare_builds_coverage_run_prefix(tmp_path) -> None:
     instrumenter = CoverageInstrumenter(
         CoverageRequest(source_targets=('src/demo',), branch=True),
