@@ -40,6 +40,9 @@ def test_strip_coverage_options_removes_bootstrap_flags() -> None:
             'tests/unit',
         ],
     ) == ['run', '--path', 'tests/unit']
+    assert _strip_coverage_options(
+        ['run', '--cov=src/demo', '--path', 'tests/unit'],
+    ) == ['run', '--path', 'tests/unit']
 
 
 def test_bootstrap_coverage_reexecutes_under_coverage(
@@ -107,7 +110,13 @@ def test_bootstrap_coverage_reexecutes_under_coverage(
         'coverage',
         'run',
     ]
-    assert '--parallel-mode' in recorded['command']
+    assert any(
+        argument.startswith('--rcfile=')
+        for argument in recorded['command']
+    )
+    assert recorded['env']['COVERAGE_PROCESS_START'].endswith(
+        '.cosecha.coveragerc',
+    )
     runner_module_index = recorded['command'].index(
         'cosecha.shell.runner_cli',
     )

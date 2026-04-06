@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+import importlib
 import io
 import sys
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
-
-import coverage
 
 from cosecha.core.instrumentation import Contribution
 from cosecha.core.session_artifacts import (
@@ -33,23 +32,20 @@ class CoverageInstrumenter:
         self.request = request
 
     def prepare(self, *, workdir: Path) -> Contribution:
-        config = coverage.Coverage(config_file=True).config
+        coverage_module = _coverage_module()
+        config = coverage_module.Coverage(config_file=True).config
         data_file = workdir / '.coverage'
+        rcfile_path = workdir / '.cosecha.coveragerc'
+        effective_branch = self.request.branch or bool(config.branch)
         argv_prefix = [
             sys.executable,
             '-m',
             'coverage',
             'run',
-            f'--data-file={data_file}',
-            '--parallel-mode',
+            f'--rcfile={rcfile_path}',
+            '-m',
+            'cosecha.shell.runner_cli',
         ]
-        if self.request.branch:
-            argv_prefix.append('--branch')
-        if self.request.source_targets:
-            argv_prefix.append(
-                '--source=' + ','.join(self.request.source_targets),
-            )
-        argv_prefix.extend(('-m', 'cosecha.shell.runner_cli'))
 
         warnings: list[str] = []
         configured_sources = tuple(
@@ -74,20 +70,32 @@ class CoverageInstrumenter:
             )
 
         return Contribution(
+            env={
+                'COVERAGE_PROCESS_START': str(rcfile_path),
+            },
             argv_prefix=tuple(argv_prefix),
+            workdir_files={
+                str(rcfile_path.relative_to(workdir)): _build_rcfile_content(
+                    branch=effective_branch,
+                    concurrency=tuple(
+                        str(item) for item in config.concurrency
+                    ),
+                    data_file=str(data_file),
+                    omit=tuple(str(item) for item in config.run_omit),
+                    source_targets=self.request.source_targets,
+                ),
+            },
             warnings=tuple(warnings),
         )
 
     def collect(self, *, workdir: Path) -> InstrumentationSummary:
         data_file = workdir / '.coverage'
+        coverage_module = _coverage_module()
         coverage_kwargs: dict[str, object] = {
-            'config_file': True,
+            'config_file': str(workdir / '.cosecha.coveragerc'),
             'data_file': str(data_file),
-            'source': list(self.request.source_targets) or None,
         }
-        if self.request.branch:
-            coverage_kwargs['branch'] = True
-        cov = coverage.Coverage(**coverage_kwargs)
+        cov = coverage_module.Coverage(**coverage_kwargs)
         cov.combine(data_paths=[str(workdir)])
         cov.save()
         typed_summary = build_coverage_summary(
@@ -134,7 +142,7 @@ def parse_coverage_request(
 
 
 def build_coverage_summary(
-    cov: coverage.Coverage,
+    cov,
     *,
     report_type: Literal['term', 'term-missing'],
 ) -> SessionCoverageSummary:
@@ -161,6 +169,37 @@ def build_coverage_summary(
         source_targets=source_targets,
         includes_worker_processes=False,
     )
+
+
+def _build_rcfile_content(
+    *,
+    branch: bool,
+    concurrency: tuple[str, ...],
+    data_file: str,
+    omit: tuple[str, ...],
+    source_targets: tuple[str, ...],
+) -> str:
+    lines = [
+        '[run]',
+        f'branch = {"True" if branch else "False"}',
+        f'data_file = {data_file}',
+        'parallel = True',
+        'patch = subprocess',
+    ]
+    if source_targets:
+        lines.append('source =')
+        lines.extend(f'    {target}' for target in source_targets)
+    if concurrency:
+        lines.append('concurrency = ' + ','.join(concurrency))
+    if omit:
+        lines.append('omit =')
+        lines.extend(f'    {pattern}' for pattern in omit)
+    lines.append('')
+    return '\n'.join(lines)
+
+
+def _coverage_module():
+    return importlib.import_module('coverage')
 
 
 def _extract_option_values(

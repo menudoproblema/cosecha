@@ -3,6 +3,8 @@ from __future__ import annotations
 import runpy
 import sys
 
+from types import SimpleNamespace
+
 import coverage
 
 from cosecha.plugin.coverage import (
@@ -46,10 +48,16 @@ def test_prepare_builds_coverage_run_prefix(tmp_path) -> None:
         'coverage',
         'run',
     )
-    assert '--parallel-mode' in contribution.argv_prefix
-    assert '--branch' in contribution.argv_prefix
-    assert '--source=src/demo' in contribution.argv_prefix
+    assert contribution.env['COVERAGE_PROCESS_START'].endswith(
+        '.cosecha.coveragerc',
+    )
+    assert '--rcfile=' in contribution.argv_prefix[4]
     assert contribution.argv_prefix[-2:] == ('-m', 'cosecha.shell.runner_cli')
+    assert '.cosecha.coveragerc' in contribution.workdir_files
+    assert 'patch = subprocess' in contribution.workdir_files[
+        '.cosecha.coveragerc'
+    ]
+    assert 'source =' in contribution.workdir_files['.cosecha.coveragerc']
 
 
 def test_collect_builds_instrumentation_summary_from_parallel_data(
@@ -77,6 +85,9 @@ def test_collect_builds_instrumentation_summary_from_parallel_data(
             report_type='term-missing',
         ),
     )
+    contribution = instrumenter.prepare(workdir=tmp_path)
+    for relative_path, contents in contribution.workdir_files.items():
+        (tmp_path / relative_path).write_text(contents, encoding='utf-8')
 
     summary = instrumenter.collect(workdir=tmp_path)
 
@@ -116,8 +127,8 @@ def test_collect_respects_branch_from_user_config_when_flag_not_passed(
             return 88.0
 
     monkeypatch.setattr(
-        'cosecha.plugin.coverage.coverage.Coverage',
-        _FakeCoverage,
+        'cosecha.plugin.coverage._coverage_module',
+        lambda: SimpleNamespace(Coverage=_FakeCoverage),
     )
 
     instrumenter = CoverageInstrumenter(
