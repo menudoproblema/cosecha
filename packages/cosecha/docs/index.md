@@ -29,6 +29,7 @@ No es dueño de:
 ## Mapa local
 
 - [Reporting y artefactos desde el CLI](./reporting.md)
+- [ADR 0001: instrumentación v1](./adr/0001-instrumentation-v1.md)
 
 ## Dependencias por defecto
 
