@@ -583,7 +583,7 @@ class _PersistentWorker:
         process = await asyncio.create_subprocess_exec(
             python_executable,
             '-m',
-            'cosecha.runtime_worker',
+            'cosecha.core.runtime_worker',
             '--persistent',
             '--worker-id',
             str(worker_id),
@@ -1550,7 +1550,7 @@ def _resolve_request_cwd(root_path: Path) -> Path:
 
 def _build_worker_env() -> dict[str, str]:
     env = os.environ.copy()
-    src_path = Path(__file__).resolve().parents[1]
+    src_path = Path(__file__).resolve().parents[2]
     current_pythonpath = env.get('PYTHONPATH')
     env['PYTHONPATH'] = (
         f'{src_path}{os.pathsep}{current_pythonpath}'

@@ -433,6 +433,8 @@ def _resolve_hook_descriptor(
     descriptor = get_hook_descriptor(hook_type)
     if descriptor is not None:
         return cast('type[ManifestHookDescriptor]', descriptor)
+    if hook_type == PythonHookDescriptor.hook_type:
+        return PythonHookDescriptor
 
     msg = f'Unsupported hook type: {hook_type!r}'
     raise ManifestValidationError(msg)
@@ -441,6 +443,8 @@ def _resolve_engine_descriptor(engine_type: str):
     descriptor = get_engine_descriptor(engine_type)
     if descriptor is not None:
         return descriptor
+    if engine_type == PythonEngineDescriptor.engine_type:
+        return PythonEngineDescriptor
 
     msg = f'Unsupported engine type: {engine_type!r}'
     raise ManifestValidationError(msg)
