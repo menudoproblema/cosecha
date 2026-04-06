@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+
 from types import SimpleNamespace
 
+from cosecha.core.capabilities import (
+    DraftValidationIssue,
+    DraftValidationResult,
+)
 from cosecha.core.domain_events import (
     TestKnowledgeIndexedEvent as IndexedEvent,
 )
@@ -12,6 +18,13 @@ from cosecha.core.knowledge_base import (
 )
 from cosecha.core.knowledge_test_descriptor import (
     TestDescriptorKnowledge as DescriptorKnowledge,
+)
+from cosecha.core.operations import (
+    DraftValidationOperationResult,
+    KnowledgeQueryContext,
+    QueryDefinitionsOperationResult,
+    ResolvedDefinition,
+    ResolveDefinitionOperationResult,
 )
 from cosecha.engine.gherkin.completion import CompletionSuggestion
 from cosecha.engine.gherkin.definition_knowledge import (
@@ -24,6 +37,83 @@ from cosecha_lsp.lsp_server import (
     build_completion_items_from_suggestions,
     build_resolved_definitions_from_knowledge,
 )
+
+
+EXPECTED_DIAGNOSTIC_LINE = 2
+
+
+class _DraftValidatingRunnerStub:
+    def __init__(self) -> None:
+        self.calls: list[object] = []
+
+    def find_engine(self, _test_file):
+        return None
+
+    async def execute_operation(self, operation):
+        self.calls.append(operation)
+        return DraftValidationOperationResult(
+            engine_name='gherkin',
+            test_path=str(operation.test_path),
+            validation=DraftValidationResult(
+                test_count=1,
+                issues=(
+                    DraftValidationIssue(
+                        code='missing_step_definition',
+                        message='Step `missing step` not found.',
+                        severity='warning',
+                        line=2,
+                        column=4,
+                    ),
+                ),
+            ),
+        )
+
+
+class _DefinitionResolvingRunnerStub:
+    def __init__(self) -> None:
+        self.calls: list[object] = []
+
+    def find_engine(self, _test_file):
+        return None
+
+    async def execute_operation(self, operation):
+        self.calls.append(operation)
+        return ResolveDefinitionOperationResult(
+            definitions=(
+                ResolvedDefinition(
+                    engine_name='gherkin',
+                    file_path=str(operation.test_path),
+                    line=12,
+                    step_type=operation.step_type,
+                    patterns=(operation.step_text,),
+                    function_name='missing_step_definition',
+                    documentation='Definition docs.',
+                    resolution_source='static_catalog',
+                ),
+            ),
+        )
+
+
+class _QueryingDefinitionRunnerStub:
+    def __init__(self, definition: DefinitionKnowledge) -> None:
+        self.query_calls: list[object] = []
+        self.definition = definition
+
+    def find_engine(self, _test_file):
+        return None
+
+    async def execute_operation(self, operation):
+        self.query_calls.append(operation)
+        if hasattr(operation, 'step_text'):
+            return ResolveDefinitionOperationResult(definitions=())
+
+        return QueryDefinitionsOperationResult(
+            definitions=(self.definition,),
+            context=KnowledgeQueryContext(
+                source='persistent_knowledge_base',
+                freshness='unknown',
+            ),
+        )
 
 
 def test_lsp_server_opens_read_only_knowledge_base_from_workspace(
@@ -144,3 +234,157 @@ def test_build_completion_items_from_suggestions_preserves_metadata() -> None:
     assert items[0].detail == 'demo detail'
     assert items[0].documentation.value == 'demo docs'
     assert items[1].label == 'plain text'
+
+
+def test_language_server_uses_typed_draft_validation_for_diagnostics(
+    tmp_path,
+) -> None:
+    server = CosechaLanguageServer('cosecha-lsp-test', '0.1')
+    server.config = build_config(tmp_path)
+    server.runner = _DraftValidatingRunnerStub()
+    server.engines = {'gherkin': SimpleNamespace(name='gherkin')}
+    server.find_gherkin_engine = lambda uri: server.engines['gherkin']  # type: ignore[method-assign]
+
+    document = SimpleNamespace(
+        uri=(tmp_path / 'features' / 'example.feature').as_uri(),
+        source='\n'.join(
+            (
+                'Feature: Example',
+                '  Scenario: Missing step',
+                '    Given missing step',
+            ),
+        ),
+    )
+
+    diagnostics = asyncio.run(server.validate_gherkin_document(document))
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].message == 'Step `missing step` not found.'
+    assert diagnostics[0].range.start.line == EXPECTED_DIAGNOSTIC_LINE
+    assert server.runner.calls
+
+
+def test_language_server_uses_typed_definition_resolution(
+    tmp_path,
+) -> None:
+    server = CosechaLanguageServer('cosecha-lsp-test', '0.1')
+    server.config = build_config(tmp_path)
+    server.runner = _DefinitionResolvingRunnerStub()
+    server.engines = {'gherkin': SimpleNamespace(name='gherkin')}
+    server.find_gherkin_engine = lambda uri: server.engines['gherkin']  # type: ignore[method-assign]
+
+    document = SimpleNamespace(
+        uri=(tmp_path / 'features' / 'example.feature').as_uri(),
+    )
+
+    definitions = asyncio.run(
+        server.resolve_gherkin_step_definitions(
+            document=document,
+            step_type='given',
+            step_text='missing step',
+        ),
+    )
+
+    assert len(definitions) == 1
+    assert definitions[0].documentation == 'Definition docs.'
+    assert server.runner.calls
+
+
+def test_language_server_falls_back_to_persistent_definition_knowledge(
+    tmp_path,
+) -> None:
+    definition = DefinitionKnowledge(
+        engine_name='gherkin',
+        file_path='tests/steps/auth.py',
+        definition_count=1,
+        discovery_mode='ast',
+        descriptors=(
+            build_gherkin_definition_record(
+                source_line=12,
+                function_name='missing_step_definition',
+                step_type='given',
+                patterns=('missing step',),
+                documentation='Definition docs.',
+            ),
+        ),
+    )
+    server = CosechaLanguageServer('cosecha-lsp-test', '0.1')
+    server.config = build_config(tmp_path)
+    server.runner = _QueryingDefinitionRunnerStub(definition)
+    server.engines = {'gherkin': SimpleNamespace(name='gherkin')}
+    server.find_gherkin_engine = lambda uri: server.engines['gherkin']  # type: ignore[method-assign]
+
+    document = SimpleNamespace(
+        uri=(tmp_path / 'features' / 'example.feature').as_uri(),
+    )
+
+    definitions = asyncio.run(
+        server.resolve_gherkin_step_definitions(
+            document=document,
+            step_type='given',
+            step_text='missing step',
+        ),
+    )
+
+    assert len(definitions) == 1
+    assert definitions[0].file_path == 'tests/steps/auth.py'
+    assert definitions[0].documentation == 'Definition docs.'
+    assert server.runner.query_calls
+
+
+def test_language_server_builds_completions_from_definition_knowledge(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    definition = DefinitionKnowledge(
+        engine_name='gherkin',
+        file_path='tests/steps/auth.py',
+        definition_count=1,
+        discovery_mode='ast',
+        descriptors=(
+            build_gherkin_definition_record(
+                source_line=12,
+                function_name='missing_step_definition',
+                step_type='given',
+                patterns=('missing step',),
+                documentation='Definition docs.',
+            ),
+        ),
+    )
+    server = CosechaLanguageServer('cosecha-lsp-test', '0.1')
+    server.config = build_config(tmp_path)
+    server.runner = _QueryingDefinitionRunnerStub(definition)
+    server.engines = {'gherkin': SimpleNamespace(name='gherkin')}
+    server.find_gherkin_engine = lambda uri: server.engines['gherkin']  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        'cosecha_lsp.lsp_server._get_gherkin_lsp_contribution',
+        lambda: SimpleNamespace(
+            build_step_completion_suggestions_from_knowledge=(
+                lambda **_kwargs: (
+                    CompletionSuggestion(
+                        label='Given missing step',
+                        insert_text='missing step',
+                        kind='text',
+                        documentation='Definition docs.',
+                    ),
+                )
+            ),
+        ),
+    )
+
+    document = SimpleNamespace(
+        uri=(tmp_path / 'features' / 'example.feature').as_uri(),
+    )
+
+    suggestions = asyncio.run(
+        server.suggest_gherkin_step_completions(
+            document=document,
+            step_type='given',
+            initial_text='mis',
+            cursor_column=5,
+            start_step_text_column=4,
+        ),
+    )
+
+    assert len(suggestions) == 1
+    assert suggestions[0].label == 'Given missing step'
