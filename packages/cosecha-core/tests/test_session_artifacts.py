@@ -5,10 +5,10 @@ import pytest
 from cosecha.core.config import ConfigSnapshot
 from cosecha.core.session_artifacts import (
     EngineReportSummary,
+    InstrumentationSummary,
     LiveEngineSnapshotSummary,
     SessionArtifact,
     SessionArtifactPersistencePolicy,
-    SessionCoverageSummary,
     SessionReportSummary,
     SessionTelemetrySummary,
     SessionTimingSnapshot,
@@ -75,10 +75,16 @@ def test_session_artifact_apply_persistence_policy_compacts_snapshots(
             ),
             failed_examples=('a', 'b', 'c'),
             failed_files=('one.py', 'two.py', 'three.py'),
-            coverage_summary=SessionCoverageSummary(
-                total_coverage=98.0,
-                report_type='term',
-            ),
+            instrumentation_summaries={
+                'coverage': InstrumentationSummary(
+                    instrumentation_name='coverage',
+                    summary_kind='coverage.py',
+                    payload={
+                        'total_coverage': 98.0,
+                        'report_type': 'term',
+                    },
+                ),
+            },
         ),
         telemetry_summary=SessionTelemetrySummary(
             span_count=5,

@@ -230,9 +230,25 @@ class SessionCoverageSummary:
         return from_builtins_dict(data, target_type=cls)
 
 
+@dataclass(slots=True, frozen=True)
+class InstrumentationSummary:
+    instrumentation_name: str
+    summary_kind: str
+    payload: dict[str, object] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, object]:
+        return to_builtins_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> InstrumentationSummary:
+        return from_builtins_dict(data, target_type=cls)
+
+
 @dataclass(slots=True)
 class SessionReportState:
-    coverage_summary: SessionCoverageSummary | None = None
+    instrumentation_summaries: dict[str, InstrumentationSummary] = field(
+        default_factory=dict,
+    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -264,7 +280,9 @@ class SessionReportSummary:
     live_engine_snapshots: tuple[LiveEngineSnapshotSummary, ...] = ()
     failed_examples: tuple[str, ...] = ()
     failed_files: tuple[str, ...] = ()
-    coverage_summary: SessionCoverageSummary | None = None
+    instrumentation_summaries: dict[str, InstrumentationSummary] = field(
+        default_factory=dict,
+    )
 
     def to_dict(self) -> dict[str, object]:
         return to_builtins_dict(self)

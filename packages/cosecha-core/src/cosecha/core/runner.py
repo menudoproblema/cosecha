@@ -3187,7 +3187,9 @@ class Runner:
             live_engine_snapshots=self._build_live_engine_snapshot_summaries(),
             failed_examples=tuple(failed_examples),
             failed_files=tuple(failed_files),
-            coverage_summary=self._session_report_state.coverage_summary,
+            instrumentation_summaries=dict(
+                self._session_report_state.instrumentation_summaries,
+            ),
         )
 
     def _build_live_engine_snapshot_summaries(
@@ -3332,12 +3334,6 @@ class Runner:
         elif len(summary.engine_summaries) > 1:
             self._append_compact_engine_session_summary(lines, summary)
 
-        if summary.coverage_summary is not None:
-            self._append_coverage_summary(
-                lines,
-                summary.coverage_summary,
-            )
-
         print_summary('Session', '\n'.join(lines))
 
     def _iter_optional_status_segments(
@@ -3391,41 +3387,6 @@ class Runner:
                     f'{name}={count}'
                     for name, count in engine_summary.failure_kind_counts
                 ),
-            )
-
-    def _append_coverage_summary(
-        self,
-        lines: list[str],
-        coverage_summary,
-    ) -> None:
-        lines.append('')
-        lines.append(
-            (
-                'Coverage: '
-                f'{coverage_summary.total_coverage:.2f}% '
-                f'[{coverage_summary.measurement_scope}]'
-            ),
-        )
-        if (
-            self._should_render_verbose_session_summary()
-            and coverage_summary.engine_names
-        ):
-            lines.append(
-                '  engines: ' + ', '.join(coverage_summary.engine_names),
-            )
-        if (
-            self._should_render_verbose_session_summary()
-            and coverage_summary.source_targets
-        ):
-            lines.append(
-                '  sources: ' + ', '.join(coverage_summary.source_targets),
-            )
-        if (
-            self._should_render_verbose_session_summary()
-            and not coverage_summary.includes_worker_processes
-        ):
-            lines.append(
-                '  worker processes are not included in this measurement',
             )
 
     def _append_compact_engine_session_summary(

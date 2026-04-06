@@ -36,9 +36,9 @@ from cosecha.core.output import OutputDetail
 from cosecha.core.runtime import LocalRuntimeProvider, ProcessRuntimeProvider
 from cosecha.core.session_artifacts import (
     EngineReportSummary,
+    InstrumentationSummary,
     LiveEngineSnapshotSummary,
     SessionArtifact,
-    SessionCoverageSummary,
     SessionReportSummary,
 )
 from cosecha_internal.testkit import build_config
@@ -516,12 +516,18 @@ def test_serialize_session_summary_artifact_exposes_breakdown(
             ),
             failed_examples=('Scenario: auth',),
             failed_files=('features/auth.feature',),
-            coverage_summary=SessionCoverageSummary(
-                total_coverage=87.5,
-                report_type='coverage.py',
-                engine_names=('gherkin',),
-                source_targets=('src/app.py',),
-            ),
+            instrumentation_summaries={
+                'coverage': InstrumentationSummary(
+                    instrumentation_name='coverage',
+                    summary_kind='coverage.py',
+                    payload={
+                        'total_coverage': 87.5,
+                        'report_type': 'coverage.py',
+                        'engine_names': ['gherkin'],
+                        'source_targets': ['src/app.py'],
+                    },
+                ),
+            },
         ),
     )
 

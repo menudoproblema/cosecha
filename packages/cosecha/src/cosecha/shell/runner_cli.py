@@ -3156,9 +3156,8 @@ def _serialize_engine_summary(engine_summary) -> dict[str, object]:
 
 def _serialize_session_summary_artifact(artifact) -> dict[str, object]:
     report_summary = artifact.report_summary
-    coverage_summary = (
-        None if report_summary is None else report_summary.coverage_summary
-    )
+    instrumentation_summaries: dict[str, object] = {}
+    coverage_summary: dict[str, object] | None = None
     engine_summaries = ()
     live_engine_snapshots = ()
     failure_kind_counts: tuple[tuple[str, int], ...] = ()
@@ -3174,6 +3173,19 @@ def _serialize_session_summary_artifact(artifact) -> dict[str, object]:
         failed_examples = report_summary.failed_examples
         failed_files = report_summary.failed_files
         total_tests = report_summary.total_tests
+        instrumentation_summaries = {
+            name: summary.to_dict()
+            for name, summary in report_summary.instrumentation_summaries.items()
+        }
+        coverage_summary = instrumentation_summaries.get('coverage')
+
+    coverage_total = None
+    if isinstance(coverage_summary, dict):
+        total_coverage = coverage_summary.get('payload', {}).get(
+            'total_coverage',
+        )
+        if isinstance(total_coverage, int | float):
+            coverage_total = float(total_coverage)
 
     live_snapshot_breakdown: dict[str, int] = {}
     for snapshot in live_engine_snapshots:
@@ -3184,13 +3196,9 @@ def _serialize_session_summary_artifact(artifact) -> dict[str, object]:
 
     return {
         'coverage_summary': (
-            None if coverage_summary is None else coverage_summary.to_dict()
+            coverage_summary
         ),
-        'coverage_total': (
-            None
-            if coverage_summary is None
-            else coverage_summary.total_coverage
-        ),
+        'coverage_total': coverage_total,
         'engine_count': len(engine_summaries),
         'engine_summaries': [
             _serialize_engine_summary(engine_summary)
@@ -3209,6 +3217,7 @@ def _serialize_session_summary_artifact(artifact) -> dict[str, object]:
             failure_kind_counts,
         ),
         'has_failures': artifact.has_failures,
+        'instrumentation_summaries': instrumentation_summaries,
         'plan_id': artifact.plan_id,
         'recorded_at': artifact.recorded_at,
         'root_path': artifact.root_path,
