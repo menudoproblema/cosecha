@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosecha-testkit-internal"
+dynamic = ["version"]
+description = "Internal reusable test support for Cosecha"
+requires-python = ">=3.13"
+dependencies = [
+    "cosecha-core",
+    "cosecha-provider-workspace-internal",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
+    "pytest",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "cosecha_internal.testkit._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
