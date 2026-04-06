@@ -3480,12 +3480,12 @@ def _execute_non_runtime_request(request: CliRequest) -> bool:
     return True
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Execute the Cosecha CLI."""
     try:
         registry = create_loaded_discovery_registry()
         with using_discovery_registry(registry):
-            request = parse_args()
+            request = parse_args() if argv is None else parse_args(argv)
             if _execute_non_runtime_request(request):
                 return
 

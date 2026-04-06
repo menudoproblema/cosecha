@@ -87,7 +87,7 @@ full = [
 mochuelo_runtime_service = "cosecha.shell.mochuelo_runtime:MochueloRuntimeServiceHookDescriptor"
 
 [project.scripts]
-cosecha = "cosecha.shell.runner_cli:main"
+cosecha = "cosecha.shell.launcher:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "cosecha._version.__version__"}

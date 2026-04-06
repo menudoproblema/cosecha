@@ -29,7 +29,7 @@ def test_cosecha_scripts_and_hook_entry_points_live_in_cli_package() -> None:
     scripts = project["scripts"]
     entry_points = project["entry-points"]
 
-    assert scripts["cosecha"] == "cosecha.shell.runner_cli:main"
+    assert scripts["cosecha"] == "cosecha.shell.launcher:main"
     assert entry_points["cosecha.hooks"]["mochuelo_runtime_service"] == (
         "cosecha.shell.mochuelo_runtime:MochueloRuntimeServiceHookDescriptor"
     )

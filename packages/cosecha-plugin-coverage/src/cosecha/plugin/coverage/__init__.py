@@ -1,4 +1,5 @@
 import io
+import os
 
 from argparse import ArgumentParser, Namespace
 from collections.abc import Iterable
@@ -32,6 +33,8 @@ class CoverageOptions(TypedDict):
 
 class CoveragePlugin(Plugin):
     __slots__ = (
+        '_coverage_kwargs',
+        '_uses_external_launcher',
         'cov',
         'report_type',
         'threshold_excellent',
@@ -47,11 +50,26 @@ class CoveragePlugin(Plugin):
         report_type: Literal['term', 'term-missing'] = 'term',
         **kwargs: Unpack[CoverageOptions],
     ):
-        self.cov = coverage.Coverage(**kwargs)
+        self.cov: coverage.Coverage | None = None
+        self._coverage_kwargs = dict(kwargs)
+        self._uses_external_launcher = False
         self.threshold_excellent = threshold_excellent
         self.threshold_fair = threshold_fair
         self.threshold_poor = threshold_poor
         self.report_type = report_type
+
+    @override
+    async def initialize(self, context) -> None:
+        await super().initialize(context)
+        active_launcher = os.environ.get('COSECHA_ACTIVE_EXECUTION_LAUNCHER')
+        active_coverage = coverage.Coverage.current()
+        if active_launcher == 'coverage' and active_coverage is not None:
+            self.cov = active_coverage
+            self._uses_external_launcher = True
+            return
+
+        self.cov = coverage.Coverage(**self._coverage_kwargs)
+        self._uses_external_launcher = False
 
     @override
     @classmethod
@@ -88,12 +106,21 @@ class CoveragePlugin(Plugin):
 
     @override
     async def start(self):
+        if self.cov is None:
+            msg = 'CoveragePlugin.initialize() must run before start()'
+            raise RuntimeError(msg)
+        if self._uses_external_launcher:
+            return
         self.cov.start()
 
     @override
     async def finish(self):
-        self.cov.stop()
-        self.cov.save()
+        if self.cov is None:
+            msg = 'CoveragePlugin.initialize() must run before finish()'
+            raise RuntimeError(msg)
+        if not self._uses_external_launcher:
+            self.cov.stop()
+            self.cov.save()
         async with self.context.telemetry_stream.span(
             'plugin.coverage.build_summary',
             attributes={'cosecha.plugin.name': self.plugin_name()},

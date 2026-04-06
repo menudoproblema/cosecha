@@ -10,6 +10,9 @@ from cosecha.plugin.coverage import CoveragePlugin
 from cosecha_internal.testkit import build_config, build_plugin_context
 
 
+EXTERNAL_COVERAGE_PERCENT = 87.5
+
+
 def test_coverage_plugin_parse_args_returns_plugin_when_cov_present() -> None:
     parser = argparse.ArgumentParser()
     CoveragePlugin.register_arguments(parser)
@@ -76,3 +79,67 @@ async def test_coverage_plugin_prints_summary_without_report_state(
 
     assert config.console.summaries
     assert config.console.summaries[0][0] == 'Coverage'
+
+
+@pytest.mark.asyncio
+async def test_coverage_plugin_reuses_active_launcher_coverage(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeCoverage:
+        def __init__(self) -> None:
+            self.started = 0
+            self.stopped = 0
+            self.saved = 0
+            self.report_calls = 0
+            self.config = type(
+                '_Config',
+                (),
+                {'branch': False, 'source': (str(tmp_path / 'demo_pkg'),)},
+            )()
+
+        def start(self) -> None:
+            self.started += 1
+
+        def stop(self) -> None:
+            self.stopped += 1
+
+        def save(self) -> None:
+            self.saved += 1
+
+        def report(self, **kwargs) -> float:
+            del kwargs
+            self.report_calls += 1
+            return EXTERNAL_COVERAGE_PERCENT
+
+    fake_coverage = _FakeCoverage()
+    plugin = CoveragePlugin(source=[str(tmp_path / 'demo_pkg')])
+    config = build_config(tmp_path)
+    report_state = SessionReportState()
+
+    monkeypatch.setenv('COSECHA_ACTIVE_EXECUTION_LAUNCHER', 'coverage')
+    monkeypatch.setattr(
+        'cosecha.plugin.coverage.coverage.Coverage.current',
+        lambda: fake_coverage,
+    )
+
+    await plugin.initialize(
+        build_plugin_context(
+            config,
+            engine_names=('pytest',),
+            session_report_state=report_state,
+        ),
+    )
+    await plugin.start()
+    await plugin.finish()
+
+    assert plugin.cov is fake_coverage
+    assert fake_coverage.started == 0
+    assert fake_coverage.stopped == 0
+    assert fake_coverage.saved == 0
+    assert fake_coverage.report_calls == 1
+    assert report_state.coverage_summary is not None
+    assert (
+        report_state.coverage_summary.total_coverage
+        == EXTERNAL_COVERAGE_PERCENT
+    )
