@@ -52,8 +52,7 @@ class JsonReporter(Reporter):
         self.start_time = 0.0
 
     def initialize(self, config: Config, engine: Engine | None = None) -> None:
-        self.config = config
-        self.engine = engine
+        super().initialize(config, engine)
 
     async def start(self) -> None:
         self._cases = []
@@ -83,39 +82,58 @@ class JsonReporter(Reporter):
         self._cases.append(case)
 
     async def print_report(self) -> None:
-        self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        duration = time.perf_counter() - self.start_time
-        counts = {
-            status.value: 0
-            for status in (
-                TestResultStatus.PASSED,
-                TestResultStatus.FAILED,
-                TestResultStatus.ERROR,
-                TestResultStatus.SKIPPED,
-                TestResultStatus.PENDING,
-            )
-        }
-        for case in self._cases:
-            counts[case.status] = counts.get(case.status, 0) + 1
+        async def _write() -> None:
+            self.output_path.parent.mkdir(parents=True, exist_ok=True)
+            duration = time.perf_counter() - self.start_time
+            counts = {
+                status.value: 0
+                for status in (
+                    TestResultStatus.PASSED,
+                    TestResultStatus.FAILED,
+                    TestResultStatus.ERROR,
+                    TestResultStatus.SKIPPED,
+                    TestResultStatus.PENDING,
+                )
+            }
+            for case in self._cases:
+                counts[case.status] = counts.get(case.status, 0) + 1
 
-        payload = {
-            'schema_version': 1,
-            'reporter': 'json',
-            'engine_name': self.engine.name
-            if self.engine is not None
-            else None,
-            'root_path': str(self.config.root_path),
-            'duration': duration,
-            'summary': {
-                'total_tests': len(self._cases),
-                'status_counts': counts,
+            payload = {
+                'schema_version': 1,
+                'reporter': 'json',
+                'engine_name': self.engine.name
+                if self.engine is not None
+                else None,
+                'root_path': str(self.config.root_path),
+                'duration': duration,
+                'summary': {
+                    'total_tests': len(self._cases),
+                    'status_counts': counts,
+                },
+                'tests': [asdict(case) for case in self._cases],
+            }
+            self.output_path.write_text(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding='utf-8',
+            )
+
+        if self.telemetry_stream is None:
+            await _write()
+            return
+
+        async with self.telemetry_stream.span(
+            'reporter.output.write',
+            attributes={
+                'cosecha.reporter.name': self.reporter_name(),
+                'cosecha.reporter.output_kind': self.reporter_output_kind(),
             },
-            'tests': [asdict(case) for case in self._cases],
-        }
-        self.output_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding='utf-8',
-        )
+        ):
+            await _write()
 
 
 def _import_gherkin_reporting():

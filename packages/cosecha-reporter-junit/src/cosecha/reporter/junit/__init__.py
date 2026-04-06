@@ -59,8 +59,7 @@ class JUnitReporter(Reporter):
         self.start_time = 0.0
 
     def initialize(self, config: Config, engine: Engine | None = None) -> None:
-        self.config = config
-        self.engine = engine
+        super().initialize(config, engine)
 
     async def start(self):
         self.start_time = time.perf_counter()
@@ -104,28 +103,45 @@ class JUnitReporter(Reporter):
             stream.write('\n')
 
     async def print_report(self):
-        total_duration = time.perf_counter() - self.start_time
-        self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.output_path.open('w', encoding='utf-8') as stream:
-            stream.write('<?xml version="1.0" encoding="utf-8"?>\n')
-            stream.write(
-                f'<testsuites time={quoteattr(f"{total_duration:.3f}")}>\n',
-            )
-            for suite_name in sorted(self._suite_states):
-                suite_state = self._suite_states[suite_name]
+        async def _write() -> None:
+            total_duration = time.perf_counter() - self.start_time
+            self.output_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.output_path.open('w', encoding='utf-8') as stream:
+                stream.write('<?xml version="1.0" encoding="utf-8"?>\n')
+                suites_open_tag = quoteattr(f'{total_duration:.3f}')
                 stream.write(
-                    _build_testsuite_open_tag(suite_state),
+                    f'<testsuites time={suites_open_tag}>\n',
                 )
-                stream.write('\n')
-                if suite_state.fragment_path.exists():
+                for suite_name in sorted(self._suite_states):
+                    suite_state = self._suite_states[suite_name]
                     stream.write(
-                        suite_state.fragment_path.read_text(encoding='utf-8'),
+                        _build_testsuite_open_tag(suite_state),
                     )
-                stream.write('</testsuite>\n')
-            stream.write('</testsuites>\n')
+                    stream.write('\n')
+                    if suite_state.fragment_path.exists():
+                        stream.write(
+                            suite_state.fragment_path.read_text(
+                                encoding='utf-8',
+                            ),
+                        )
+                    stream.write('</testsuite>\n')
+                stream.write('</testsuites>\n')
 
-        if self._temp_dir.exists():
-            shutil.rmtree(self._temp_dir)
+            if self._temp_dir.exists():
+                shutil.rmtree(self._temp_dir)
+
+        if self.telemetry_stream is None:
+            await _write()
+            return
+
+        async with self.telemetry_stream.span(
+            'reporter.output.write',
+            attributes={
+                'cosecha.reporter.name': self.reporter_name(),
+                'cosecha.reporter.output_kind': self.reporter_output_kind(),
+            },
+        ):
+            await _write()
 
 
 def _build_testsuite_open_tag(suite_state: _JUnitSuiteState) -> str:

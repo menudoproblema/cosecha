@@ -81,7 +81,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from cosecha.engine.gherkin.types import StepType
 
 
-SERVER_NAME: Final[str] = 'granjero'
+SERVER_NAME: Final[str] = 'cosecha-lsp'
 
 logger = logging.getLogger(__name__)
 

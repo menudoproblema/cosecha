@@ -21,6 +21,7 @@ dev = [
 ]
 
 [project.scripts]
+cosecha-lsp = "cosecha_lsp.lsp_server:main"
 granjero = "cosecha_lsp.lsp_server:main"
 
 [tool.setuptools.dynamic]

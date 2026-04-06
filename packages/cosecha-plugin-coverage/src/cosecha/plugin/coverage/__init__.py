@@ -94,11 +94,19 @@ class CoveragePlugin(Plugin):
     async def finish(self):
         self.cov.stop()
         self.cov.save()
-        summary = self.build_coverage_summary()
+        async with self.context.telemetry_stream.span(
+            'plugin.coverage.build_summary',
+            attributes={'cosecha.plugin.name': self.plugin_name()},
+        ):
+            summary = self.build_coverage_summary()
         if self.context.session_report_state is not None:
             self.context.session_report_state.coverage_summary = summary
             return
-        self.print_coverage_report(summary)
+        async with self.context.telemetry_stream.span(
+            'plugin.coverage.print_report',
+            attributes={'cosecha.plugin.name': self.plugin_name()},
+        ):
+            self.print_coverage_report(summary)
 
     def build_coverage_summary(self) -> SessionCoverageSummary:
         file = io.StringIO()
