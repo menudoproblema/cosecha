@@ -220,6 +220,7 @@ class SessionCoverageSummary:
     branch: bool = False
     engine_names: tuple[str, ...] = ()
     source_targets: tuple[str, ...] = ()
+    includes_python_subprocesses: bool = False
     includes_worker_processes: bool = False
 
     def to_dict(self) -> dict[str, object]:

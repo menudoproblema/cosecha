@@ -24,13 +24,16 @@ e incluye:
 - engines observados,
 - `source_targets`,
 - tipo de reporte,
-- si la medición incluye procesos worker.
+- si la medición incluye subprocess Python,
+- si la medición incluye procesos worker de Cosecha.
 
 La implementación actual publica explícitamente:
 
 - `measurement_scope = controller_process`
+- `includes_python_subprocesses = true`
 - `includes_worker_processes = false`
 
 Eso significa que hoy la cobertura multi-engine agrega correctamente
-entre engines que ejecutan código en el proceso controlador, pero no
-pretende describir todavía workers persistentes o runtimes remotos.
+entre engines que ejecutan código en el proceso controlador, instrumenta
+subprocess Python lanzados desde ese proceso y no pretende describir
+todavía workers persistentes o runtimes remotos como garantizados.

@@ -12,9 +12,8 @@ import time
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable
 
-from cosecha.core.config import Config
+from cosecha.core.config import Config, ConfigSnapshot
 from cosecha.core.instrumentation import (
     COSECHA_COVERAGE_ACTIVE_ENV,
     COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
@@ -73,8 +72,16 @@ def _load_metadata(metadata_path: Path) -> dict[str, object] | None:
     return json.loads(metadata_path.read_text(encoding='utf-8'))
 
 
-def _open_knowledge_base(db_path: Path) -> PersistentKnowledgeBase:
-    return PersistentKnowledgeBase(db_path)
+def _config_snapshot_from_metadata(
+    metadata: dict[str, object],
+) -> ConfigSnapshot | None:
+    snapshot_payload = metadata.get('config_snapshot')
+    if not isinstance(snapshot_payload, dict):
+        return None
+    try:
+        return ConfigSnapshot.from_dict(snapshot_payload)
+    except (TypeError, ValueError):
+        return None
 
 
 def _update_session_artifact(
@@ -84,17 +91,16 @@ def _update_session_artifact(
 ) -> tuple[object | None, str | None]:
     knowledge_base_path = metadata.get('knowledge_base_path')
     session_id = metadata.get('session_id')
-    if not isinstance(knowledge_base_path, str) or not isinstance(
-        session_id,
-        str,
-    ):
+    if not isinstance(session_id, str):
         return (None, 'session metadata is incomplete')
+    if not isinstance(knowledge_base_path, str):
+        return (None, 'session metadata has no persistent knowledge base')
 
     db_path = Path(knowledge_base_path)
     for attempt in range(_SESSION_ARTIFACT_RETRY_ATTEMPTS):
         knowledge_base = None
         try:
-            knowledge_base = _open_knowledge_base(db_path)
+            knowledge_base = PersistentKnowledgeBase(db_path)
             artifacts = knowledge_base.query_session_artifacts(
                 SessionArtifactQuery(session_id=session_id, limit=1),
             )
@@ -161,7 +167,13 @@ def _render_coverage_summary(summary, *, config_snapshot) -> None:
         lines.append(
             '  sources: ' + ', '.join(str(target) for target in source_targets),
         )
-    if payload.get('includes_worker_processes') is False:
+    if payload.get('includes_worker_processes') is True:
+        lines.append('  worker processes are included in this measurement')
+    elif payload.get('includes_python_subprocesses') is True:
+        lines.append(
+            '  python subprocesses are included in this measurement',
+        )
+    else:
         lines.append('  worker processes are not included in this measurement')
     console = Config.from_snapshot(config_snapshot).console
     console.print_summary('Coverage', '\n'.join(lines))
@@ -222,6 +234,7 @@ def _bootstrap_coverage(argv: list[str]) -> int:
                 'no session metadata was written; coverage was not persisted.',
             )
             return int(completed.returncode)
+        metadata_config_snapshot = _config_snapshot_from_metadata(metadata)
 
         try:
             summary = instrumenter.collect(workdir=workdir)
@@ -232,7 +245,13 @@ def _bootstrap_coverage(argv: list[str]) -> int:
             if updated_artifact is None and warning is not None:
                 _emit_coverage_warning(
                     f'coverage was collected but not persisted ({warning}).',
+                    config_snapshot=metadata_config_snapshot,
                 )
+                if metadata_config_snapshot is not None:
+                    _render_coverage_summary(
+                        summary,
+                        config_snapshot=metadata_config_snapshot,
+                    )
             if updated_artifact is not None:
                 _render_coverage_summary(
                     summary,
@@ -249,17 +268,12 @@ def _bootstrap_coverage(argv: list[str]) -> int:
         if cleanup_workdir:
             shutil.rmtree(workdir, ignore_errors=True)
 
-
-def _iter_bootstrap_handlers(
-    argv: list[str],
-) -> tuple[tuple[Callable[[list[str]], bool], Callable[[list[str]], int]], ...]:
-    del argv
-    return ((_should_bootstrap_coverage, _bootstrap_coverage),)
+_BOOTSTRAP_HANDLERS = ((_should_bootstrap_coverage, _bootstrap_coverage),)
 
 
 def main(argv: list[str] | None = None) -> None:
     argv_list = list(sys.argv[1:] if argv is None else argv)
-    for should_bootstrap, bootstrap in _iter_bootstrap_handlers(argv_list):
+    for should_bootstrap, bootstrap in _BOOTSTRAP_HANDLERS:
         if should_bootstrap(argv_list):
             raise SystemExit(bootstrap(argv_list))
 

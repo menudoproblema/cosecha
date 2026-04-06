@@ -52,8 +52,11 @@ def test_write_instrumentation_metadata_file_is_atomic(
 
     assert metadata_path.exists()
     assert not Path(f'{metadata_path}.tmp').exists()
-    assert json.loads(metadata_path.read_text(encoding='utf-8')) == {
-        'knowledge_base_path': str(db_path),
-        'root_path': artifact.root_path,
-        'session_id': artifact.session_id,
-    }
+    payload = json.loads(metadata_path.read_text(encoding='utf-8'))
+
+    assert payload['knowledge_base_path'] == str(db_path)
+    assert payload['root_path'] == artifact.root_path
+    assert payload['session_id'] == artifact.session_id
+    assert ConfigSnapshot.from_dict(payload['config_snapshot']) == (
+        artifact.config_snapshot
+    )

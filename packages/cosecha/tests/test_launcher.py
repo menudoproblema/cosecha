@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 
@@ -256,7 +257,7 @@ def test_update_session_artifact_retries_when_artifact_is_not_visible_yet(
             calls['closed'] = calls.get('closed', 0) + 1
 
     monkeypatch.setattr(
-        'cosecha.shell.launcher._open_knowledge_base',
+        'cosecha.shell.launcher.PersistentKnowledgeBase',
         lambda db_path: _FakeKnowledgeBase(),
     )
     monkeypatch.setattr(
@@ -303,7 +304,10 @@ def test_update_session_artifact_retries_on_operational_error(
             raise sqlite3.OperationalError('database is locked')
         return _FakeKnowledgeBase()
 
-    monkeypatch.setattr('cosecha.shell.launcher._open_knowledge_base', fake_open)
+    monkeypatch.setattr(
+        'cosecha.shell.launcher.PersistentKnowledgeBase',
+        fake_open,
+    )
     monkeypatch.setattr(
         'cosecha.shell.launcher.time.sleep',
         lambda seconds: calls.setdefault('sleeps', []).append(seconds),
@@ -331,11 +335,13 @@ def test_launcher_main_uses_internal_bootstrap_handlers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        'cosecha.shell.launcher._iter_bootstrap_handlers',
-        lambda argv: (
+        'cosecha.shell.launcher._BOOTSTRAP_HANDLERS',
+        (
             (
-                lambda received: received == argv,
-                lambda received: 11 if received == argv else 3,
+                lambda received: received == ['run', '--cov', 'src/demo'],
+                lambda received: 11
+                if received == ['run', '--cov', 'src/demo']
+                else 3,
             ),
         ),
     )
@@ -344,3 +350,67 @@ def test_launcher_main_uses_internal_bootstrap_handlers(
         main(['run', '--cov', 'src/demo'])
 
     assert error.value.code == 11
+
+
+def test_bootstrap_coverage_renders_from_metadata_when_persistence_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: dict[str, object] = {}
+
+    def fake_run(command, *, check, env):
+        del command, check
+        metadata_path = env['COSECHA_INSTRUMENTATION_METADATA_FILE']
+        with open(metadata_path, 'w', encoding='utf-8') as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        'knowledge_base_path': None,
+                        'session_id': 'session-1',
+                        'config_snapshot': ConfigSnapshot(
+                            root_path='/workspace/demo',
+                            output_mode='summary',
+                            output_detail='standard',
+                            capture_log=True,
+                            stop_on_error=False,
+                            concurrency=1,
+                            strict_step_ambiguity=False,
+                        ).to_dict(),
+                    },
+                ),
+            )
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr('cosecha.shell.launcher.subprocess.run', fake_run)
+    monkeypatch.setattr(
+        'cosecha.plugin.coverage.CoverageInstrumenter.collect',
+        lambda self, *, workdir: SimpleNamespace(
+            instrumentation_name='coverage',
+            payload={'total_coverage': 87.5},
+        ),
+    )
+    monkeypatch.setattr(
+        'cosecha.shell.launcher._render_coverage_summary',
+        lambda summary, *, config_snapshot: recorded.update(
+            {
+                'summary': summary,
+                'config_snapshot': config_snapshot,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        'cosecha.shell.launcher._emit_coverage_warning',
+        lambda message, *, config_snapshot=None: recorded.update(
+            {
+                'warning': message,
+                'warning_config_snapshot': config_snapshot,
+            },
+        ),
+    )
+
+    exit_code = _bootstrap_coverage(['run', '--cov', 'src/demo'])
+
+    assert exit_code == 0
+    assert recorded['warning'].startswith(
+        'coverage was collected but not persisted',
+    )
+    assert recorded['config_snapshot'].output_mode == 'summary'

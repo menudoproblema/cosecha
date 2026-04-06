@@ -208,4 +208,5 @@ def test_prepare_instruments_python_subprocesses_with_process_start(
     }
 
     assert child_path.resolve() in measured_files
-    assert summary.payload['includes_worker_processes'] is True
+    assert summary.payload['includes_python_subprocesses'] is True
+    assert summary.payload['includes_worker_processes'] is False

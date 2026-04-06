@@ -262,6 +262,7 @@ def _write_instrumentation_metadata_from_environment(
         'knowledge_base_path': None if db_path is None else str(db_path),
         'root_path': artifact.root_path,
         'session_id': artifact.session_id,
+        'config_snapshot': artifact.config_snapshot.to_dict(),
     }
     temp_path = metadata_path.with_name(f'{metadata_path.name}.tmp')
     temp_path.write_text(json.dumps(payload), encoding='utf-8')
