@@ -167,12 +167,12 @@ def _render_coverage_summary(summary, *, config_snapshot) -> None:
         lines.append(
             '  sources: ' + ', '.join(str(target) for target in source_targets),
         )
-    if payload.get('includes_worker_processes') is True:
-        lines.append('  worker processes are included in this measurement')
-    elif payload.get('includes_python_subprocesses') is True:
+    if payload.get('includes_python_subprocesses') is True:
         lines.append(
             '  python subprocesses are included in this measurement',
         )
+    if payload.get('includes_worker_processes') is True:
+        lines.append('  worker processes are included in this measurement')
     else:
         lines.append('  worker processes are not included in this measurement')
     console = Config.console_from_snapshot(config_snapshot)
@@ -267,6 +267,7 @@ def _bootstrap_coverage(argv: list[str]) -> int:
     finally:
         if cleanup_workdir:
             shutil.rmtree(workdir, ignore_errors=True)
+
 
 _BOOTSTRAP_HANDLERS = ((_should_bootstrap_coverage, _bootstrap_coverage),)
 

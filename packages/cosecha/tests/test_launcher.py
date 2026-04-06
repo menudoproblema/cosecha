@@ -19,6 +19,7 @@ from cosecha.core.session_artifacts import (
 )
 from cosecha.shell.launcher import (
     _bootstrap_coverage,
+    _render_coverage_summary,
     _update_session_artifact,
     _should_bootstrap_coverage,
     _strip_coverage_options,
@@ -194,6 +195,46 @@ def test_launcher_main_delegates_to_runner_cli_when_no_launcher_matches(
         main(['run', '--path', 'tests/unit'])
 
     assert error.value.code == 7
+
+
+def test_render_coverage_summary_describes_subprocesses_and_workers_separately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rendered: dict[str, object] = {}
+
+    class _FakeConsole:
+        def print_summary(self, title: str, text: str) -> None:
+            rendered['title'] = title
+            rendered['text'] = text
+
+    monkeypatch.setattr(
+        'cosecha.shell.launcher.Config.console_from_snapshot',
+        lambda snapshot: _FakeConsole(),
+    )
+
+    _render_coverage_summary(
+        SimpleNamespace(
+            payload={
+                'total_coverage': 87.5,
+                'measurement_scope': 'controller_process',
+                'includes_python_subprocesses': True,
+                'includes_worker_processes': False,
+            },
+        ),
+        config_snapshot=ConfigSnapshot(
+            root_path='/workspace/demo',
+            output_mode='summary',
+            output_detail='standard',
+            capture_log=True,
+            stop_on_error=False,
+            concurrency=1,
+            strict_step_ambiguity=False,
+        ),
+    )
+
+    assert rendered['title'] == 'Coverage'
+    assert 'python subprocesses are included' in rendered['text']
+    assert 'worker processes are not included' in rendered['text']
 
 
 def test_update_session_artifact_retries_when_artifact_is_not_visible_yet(
