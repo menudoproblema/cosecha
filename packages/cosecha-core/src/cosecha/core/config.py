@@ -183,3 +183,16 @@ class Config:
                 Path(path) for path in snapshot.definition_paths
             ),
         )
+
+    @classmethod
+    def console_from_snapshot(
+        cls,
+        snapshot: ConfigSnapshot,
+        *,
+        console_cls: type[Console] | None = None,
+    ) -> Console:
+        effective_console_cls = console_cls or Console
+        return effective_console_cls(
+            output_mode=OutputMode(snapshot.output_mode),
+            output_detail=OutputDetail(snapshot.output_detail),
+        )

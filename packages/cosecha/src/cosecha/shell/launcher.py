@@ -175,7 +175,7 @@ def _render_coverage_summary(summary, *, config_snapshot) -> None:
         )
     else:
         lines.append('  worker processes are not included in this measurement')
-    console = Config.from_snapshot(config_snapshot).console
+    console = Config.console_from_snapshot(config_snapshot)
     console.print_summary('Coverage', '\n'.join(lines))
 
 
@@ -187,7 +187,7 @@ def _emit_coverage_warning(
     if config_snapshot is None:
         print(f'Coverage warning: {message}')
         return
-    console = Config.from_snapshot(config_snapshot).console
+    console = Config.console_from_snapshot(config_snapshot)
     console.print_summary('Coverage Warning', message)
 
 

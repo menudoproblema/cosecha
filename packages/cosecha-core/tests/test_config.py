@@ -34,3 +34,19 @@ def test_config_resolves_relative_definition_paths_and_roundtrips_snapshot(
     assert restored.definition_paths == config.definition_paths
     assert restored.reports == config.reports
     assert isinstance(restored.console, CapturingConsole)
+
+
+def test_config_builds_console_directly_from_snapshot(
+    tmp_path: Path,
+) -> None:
+    config = build_config(tmp_path, output_mode=OutputMode.DEBUG)
+    snapshot = config.snapshot()
+
+    console = type(config).console_from_snapshot(
+        snapshot,
+        console_cls=CapturingConsole,
+    )
+
+    assert isinstance(console, CapturingConsole)
+    assert console.output_mode == OutputMode.DEBUG
+    assert console.output_detail == OutputDetail.STANDARD
