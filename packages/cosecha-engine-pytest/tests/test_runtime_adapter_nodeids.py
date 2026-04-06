@@ -17,6 +17,12 @@ from cosecha.engine.pytest.runtime_adapter import (
 )
 
 
+PYTEST_ASYNCIO_LOOP_SCOPE_ARGS = (
+    '-o',
+    'asyncio_default_fixture_loop_scope=function',
+)
+
+
 def test_runtime_adapter_resolves_nodeid_relative_to_package_root() -> None:
     requested_nodeid = (
         'packages/cosecha-core/tests/test_demo.py::test_case'
@@ -179,7 +185,11 @@ def test_resource_bridge_plugin_skips_manifest_fixture_without_resources(
         with pytest.MonkeyPatch.context() as monkeypatch:
             monkeypatch.chdir(root_path)
             exit_code = pytest.main(
-                ['-q', 'tests/test_demo_skip.py::test_workspace'],
+                [
+                    *PYTEST_ASYNCIO_LOOP_SCOPE_ARGS,
+                    '-q',
+                    'tests/test_demo_skip.py::test_workspace',
+                ],
                 plugins=[capture_plugin],
             )
 
@@ -336,7 +346,11 @@ def test_resource_bridge_plugin_discovers_manifest_in_parent_directory(
         with pytest.MonkeyPatch.context() as monkeypatch:
             monkeypatch.chdir(package_path)
             exit_code = pytest.main(
-                ['-q', 'tests/test_demo_nested.py::test_workspace'],
+                [
+                    *PYTEST_ASYNCIO_LOOP_SCOPE_ARGS,
+                    '-q',
+                    'tests/test_demo_nested.py::test_workspace',
+                ],
                 plugins=[capture_plugin],
             )
 

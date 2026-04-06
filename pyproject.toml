@@ -164,4 +164,5 @@ docstring-code-format = false
 docstring-code-line-length = "dynamic"
 
 [tool.pytest.ini_options]
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib -o asyncio_default_fixture_loop_scope=function"
+asyncio_default_fixture_loop_scope = "function"

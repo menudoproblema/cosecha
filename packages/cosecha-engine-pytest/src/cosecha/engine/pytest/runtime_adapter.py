@@ -381,6 +381,8 @@ def run_pytest_runtime_batch_in_process(
             [
                 '-p',
                 'no:cosecha_resource_bridge',
+                '-o',
+                'asyncio_default_fixture_loop_scope=function',
                 '-q',
                 '--disable-warnings',
                 *nodeids,
