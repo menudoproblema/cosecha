@@ -7,7 +7,7 @@ import os
 import sys
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from cosecha.core.runtime_profiles import build_runtime_canonical_binding_name
@@ -45,20 +45,31 @@ class PytestRuntimeResult:
 
 
 class _PytestRuntimeCapturePlugin:
-    __slots__ = ('collection_failed', 'nodeids', 'reports_by_nodeid')
+    __slots__ = (
+        'collection_failed',
+        'nodeid_aliases',
+        'nodeids',
+        'reports_by_nodeid',
+    )
 
     def __init__(self, nodeids: tuple[str, ...]) -> None:
         self.nodeids = frozenset(nodeids)
+        self.nodeid_aliases = _build_nodeid_aliases(nodeids)
         self.reports_by_nodeid: dict[str, dict[str, Any]] = {}
         self.collection_failed = False
 
     def pytest_runtest_logreport(self, report: Any) -> None:
-        if report.nodeid not in self.nodeids:
+        resolved_nodeid = _resolve_report_nodeid(
+            str(report.nodeid),
+            self.nodeids,
+            self.nodeid_aliases,
+        )
+        if resolved_nodeid is None:
             return
 
-        self.reports_by_nodeid.setdefault(report.nodeid, {})[report.when] = (
-            report
-        )
+        self.reports_by_nodeid.setdefault(resolved_nodeid, {})[
+            report.when
+        ] = report
 
     def pytest_collectreport(self, report: Any) -> None:
         if report.failed:
@@ -222,6 +233,45 @@ def _format_longrepr(report: Any) -> str | None:
     return None if longrepr is None else str(longrepr)
 
 
+def _build_nodeid_aliases(
+    nodeids: tuple[str, ...],
+) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    collisions: set[str] = set()
+    for nodeid in nodeids:
+        for alias in _iter_nodeid_aliases(nodeid):
+            if alias in collisions:
+                continue
+            current = aliases.get(alias)
+            if current is None:
+                aliases[alias] = nodeid
+                continue
+            if current != nodeid:
+                aliases.pop(alias, None)
+                collisions.add(alias)
+    return aliases
+
+
+def _iter_nodeid_aliases(nodeid: str) -> tuple[str, ...]:
+    path_part, *tail_parts = nodeid.split('::')
+    path = PurePosixPath(path_part)
+    aliases = []
+    for index in range(len(path.parts)):
+        alias_path = PurePosixPath(*path.parts[index:]).as_posix()
+        aliases.append('::'.join((alias_path, *tail_parts)))
+    return tuple(aliases)
+
+
+def _resolve_report_nodeid(
+    report_nodeid: str,
+    requested_nodeids: frozenset[str],
+    nodeid_aliases: dict[str, str],
+) -> str | None:
+    if report_nodeid in requested_nodeids:
+        return report_nodeid
+    return nodeid_aliases.get(report_nodeid)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument('--root-path', required=True)
@@ -321,6 +371,46 @@ def _build_resource_bridge_plugin(
     return plugin_type()
 
 
+@contextlib.contextmanager
+def _temporary_request_resource_bridge(
+    resources: dict[str, object],
+):
+    if pytest is None or not resources:
+        yield
+        return
+
+    fixture_request_type = getattr(pytest, 'FixtureRequest', None)
+    if fixture_request_type is None:
+        yield
+        return
+
+    had_existing = hasattr(fixture_request_type, 'get_resource')
+    previous_value = getattr(
+        fixture_request_type,
+        'get_resource',
+        None,
+    )
+
+    def _get_resource(self, resource_name: str) -> object:
+        del self
+        if resource_name not in resources:
+            msg = (
+                'Pytest request does not expose resource '
+                f'{resource_name!r}'
+            )
+            raise LookupError(msg)
+        return resources[resource_name]
+
+    fixture_request_type.get_resource = _get_resource
+    try:
+        yield
+    finally:
+        if had_existing:
+            fixture_request_type.get_resource = previous_value
+        else:
+            delattr(fixture_request_type, 'get_resource')
+
+
 def run_pytest_runtime_batch_in_process(
     *,
     root_path: Path,
@@ -348,7 +438,11 @@ def run_pytest_runtime_batch_in_process(
     if resource_bridge_plugin is not None:
         plugins.append(resource_bridge_plugin)
 
-    with _temporary_runtime_root(root_path):
+    with _temporary_runtime_root(
+        root_path,
+    ), _temporary_request_resource_bridge(
+        resources or {},
+    ):
         pytest.main(
             ['-q', '--disable-warnings', *nodeids],
             plugins=plugins,

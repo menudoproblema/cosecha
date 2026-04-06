@@ -4,6 +4,7 @@ import asyncio
 import builtins
 import contextlib
 import fnmatch
+import importlib
 import inspect
 import json
 import os
@@ -14,6 +15,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from cosecha.core.discovery import (
+    create_loaded_discovery_registry,
+    get_current_discovery_registry,
+    get_default_discovery_registry,
+    register_engine_descriptor,
+    register_hook_descriptor,
+    using_discovery_registry,
+)
 from cosecha.core.items import (
     ExecutionPredicateEvaluation,
     TestItem,
@@ -78,6 +87,13 @@ class PytestTestDefinition:
 @dataclass(slots=True, frozen=True)
 class _PytestRequestProxy:
     param: object | None = None
+    resources: dict[str, object] | None = None
+
+    def get_resource(self, resource_name: str) -> object:
+        if self.resources is None or resource_name not in self.resources:
+            msg = f'Unknown Cosecha resource: {resource_name!r}'
+            raise LookupError(msg)
+        return self.resources[resource_name]
 
 
 @dataclass(slots=True)
@@ -148,6 +164,27 @@ def _temporary_import_root(root_path: Path):
                 sys.path.remove(resolved_root_path)
 
 
+@contextlib.contextmanager
+def _temporary_loaded_discovery_registry():
+    if (
+        get_current_discovery_registry()
+        is not get_default_discovery_registry()
+    ):
+        _register_builtin_manifest_descriptors()
+        yield
+        return
+
+    with using_discovery_registry(create_loaded_discovery_registry()):
+        _register_builtin_manifest_descriptors()
+        yield
+
+
+def _register_builtin_manifest_descriptors() -> None:
+    manifest_module = importlib.import_module('cosecha.core.cosecha_manifest')
+    register_engine_descriptor(manifest_module.PythonEngineDescriptor)
+    register_hook_descriptor(manifest_module.PythonHookDescriptor)
+
+
 class PytestTestItem(TestItem):
     __slots__ = (
         '_manifest_resource_requirements',
@@ -202,26 +239,27 @@ class PytestTestItem(TestItem):
             and self.definition.xfail_run
         )
         try:
-            module, test_fn = self._load_test_callable()
-            fixture_modules = self._load_fixture_modules(module)
-            indirect_parameter_values = {
-                name: value
-                for name, value in self.definition.parameter_values
-                if name in self.definition.indirect_fixture_names
-            }
-            fixture_values = await self._build_fixture_values(
-                fixture_modules,
-                context,
-                indirect_parameter_values=indirect_parameter_values,
-            )
-            parameter_values = {
-                name: value
-                for name, value in self.definition.parameter_values
-                if name not in self.definition.indirect_fixture_names
-            }
-            result = test_fn(**fixture_values, **parameter_values)
-            if inspect.isawaitable(result):
-                await result
+            with _temporary_loaded_discovery_registry():
+                module, test_fn = self._load_test_callable()
+                fixture_modules = self._load_fixture_modules(module)
+                indirect_parameter_values = {
+                    name: value
+                    for name, value in self.definition.parameter_values
+                    if name in self.definition.indirect_fixture_names
+                }
+                fixture_values = await self._build_fixture_values(
+                    fixture_modules,
+                    context,
+                    indirect_parameter_values=indirect_parameter_values,
+                )
+                parameter_values = {
+                    name: value
+                    for name, value in self.definition.parameter_values
+                    if name not in self.definition.indirect_fixture_names
+                }
+                result = test_fn(**fixture_values, **parameter_values)
+                if inspect.isawaitable(result):
+                    await result
         except Exception as error:
             if not xfail_active:
                 raise
@@ -619,6 +657,7 @@ class PytestTestItem(TestItem):
                 dependency_values[dependency_name] = (
                     self._build_fixture_request(
                         fixture_name,
+                        context=resolution_state.context,
                         indirect_parameter_values=(
                             resolution_state.indirect_parameter_values
                         ),
@@ -667,10 +706,12 @@ class PytestTestItem(TestItem):
         self,
         fixture_name: str,
         *,
+        context: Any,
         indirect_parameter_values: dict[str, object],
     ) -> _PytestRequestProxy:
         return _PytestRequestProxy(
             param=indirect_parameter_values.get(fixture_name),
+            resources=getattr(context, 'resources', None),
         )
 
     def _materialize_generator_fixture(
