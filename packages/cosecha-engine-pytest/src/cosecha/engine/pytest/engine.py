@@ -145,6 +145,49 @@ class PytestEngine(Engine):
         return PytestContext(resource_bindings=self.resource_bindings)
 
     @override
+    def build_live_snapshot_payload(
+        self,
+        node,
+        phase: str,
+    ) -> dict[str, object] | None:
+        definition = getattr(node.test, 'definition', None)
+        nodeid_builder = getattr(node.test, '_build_pytest_nodeid', None)
+        if definition is None or not callable(nodeid_builder):
+            return None
+
+        nodeid = nodeid_builder()
+        fixture_names = tuple(
+            dict.fromkeys(
+                (
+                    *(getattr(definition, 'usefixture_names', ()) or ()),
+                    *(getattr(definition, 'fixture_names', ()) or ()),
+                    *(getattr(definition, 'indirect_fixture_names', ()) or ()),
+                ),
+            ),
+        )
+        uses_internal_fast_path = getattr(
+            node.test,
+            'uses_internal_fast_path',
+            None,
+        )
+        return {
+            'active_fixture_names': fixture_names,
+            'current_phase': phase,
+            'nodeid': nodeid,
+            'runtime_mode': (
+                'pytest_adapter'
+                if not callable(uses_internal_fast_path)
+                or not uses_internal_fast_path()
+                else 'internal_fast_path'
+            ),
+            'runtime_reason': getattr(
+                definition,
+                'pytest_runtime_reason',
+                None,
+            ),
+        }
+
+    @override
     async def collect(
         self,
         path: Path | tuple[Path, ...] | None = None,

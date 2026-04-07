@@ -115,6 +115,27 @@ def test_constructor_and_initialize_paths(tmp_path: Path) -> None:
     assert engine.step_registry is not None
 
 
+def test_build_live_snapshot_payload_returns_phase_snapshot(
+    tmp_path: Path,
+) -> None:
+    engine = _build_engine(tmp_path)
+    test = _build_test_item(
+        tmp_path,
+        (tmp_path / 'suite' / 'demo.feature').resolve(),
+    )
+    node = SimpleNamespace(test=test)
+
+    payload = engine.build_live_snapshot_payload(node, 'setup')
+
+    assert payload == {
+        'current_phase': 'setup',
+        'feature_name': 'Demo',
+        'scenario_name': 'Works',
+        'step_count': 1,
+        'test_path': str((tmp_path / 'suite' / 'demo.feature').resolve()),
+    }
+
+
 @pytest.mark.asyncio
 async def test_collect_refreshes_lazy_resolver_and_binds_resources(
     monkeypatch,

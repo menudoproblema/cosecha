@@ -17,6 +17,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from cosecha.core.console import Justify, Overflow
     from cosecha.core.domain_event_stream import DomainEventStream
     from cosecha.core.engine_dependencies import EngineDependencyRule
+    from cosecha.core.execution_ir import TestExecutionNode
     from cosecha.core.hooks import EngineHook
     from cosecha.core.items import TestItem, TestPreflightDecision
     from cosecha.core.reporter import Reporter
@@ -185,6 +186,14 @@ class Engine(ABC):
         self,
     ) -> tuple[EngineDependencyRule, ...]:
         return ()
+
+    def build_live_snapshot_payload(
+        self,
+        node: TestExecutionNode,
+        phase: str,
+    ) -> dict[str, object] | None:
+        del node, phase
+        return None
 
     def log(  # noqa: PLR0913
         self,

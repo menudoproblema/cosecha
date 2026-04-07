@@ -729,47 +729,13 @@ class Runner:
             last_updated_at=event.timestamp,
         )
 
-    def _build_pytest_engine_snapshot_payload(
+    def _build_engine_snapshot_payload(
         self,
         node: TestExecutionNode,
         *,
         current_phase: str,
     ) -> dict[str, object] | None:
-        definition = getattr(node.test, 'definition', None)
-        nodeid_builder = getattr(node.test, '_build_pytest_nodeid', None)
-        if definition is None or not callable(nodeid_builder):
-            return None
-        nodeid = nodeid_builder() if callable(nodeid_builder) else None
-        fixture_names = tuple(
-            dict.fromkeys(
-                (
-                    *(getattr(definition, 'usefixture_names', ()) or ()),
-                    *(getattr(definition, 'fixture_names', ()) or ()),
-                    *(getattr(definition, 'indirect_fixture_names', ()) or ()),
-                ),
-            ),
-        )
-        uses_internal_fast_path = getattr(
-            node.test,
-            'uses_internal_fast_path',
-            None,
-        )
-        return {
-            'active_fixture_names': fixture_names,
-            'current_phase': current_phase,
-            'nodeid': nodeid,
-            'runtime_mode': (
-                'pytest_adapter'
-                if not callable(uses_internal_fast_path)
-                or not uses_internal_fast_path()
-                else 'internal_fast_path'
-            ),
-            'runtime_reason': getattr(
-                definition,
-                'pytest_runtime_reason',
-                None,
-            ),
-        }
+        return node.engine.build_live_snapshot_payload(node, current_phase)
 
     async def _notify_live_update(
         self,
@@ -1206,7 +1172,10 @@ class Runner:
 
     def _create_knowledge_base(self) -> KnowledgeBase:
         return PersistentKnowledgeBase(
-            resolve_knowledge_base_path(self.config.root_path),
+            resolve_knowledge_base_path(
+                self.config.workspace_root_path,
+                knowledge_storage_root=self.config.knowledge_storage_root_path,
+            ),
         )
 
     def _stop_log_capture(self) -> None:
@@ -1850,6 +1819,11 @@ class Runner:
         await self._domain_event_stream.emit(
             SessionStartedEvent(
                 root_path=str(self.config.root_path),
+                workspace_fingerprint=(
+                    None
+                    if self.config.workspace is None
+                    else self.config.workspace.fingerprint
+                ),
                 concurrency=self.config.concurrency,
                 metadata=self._build_domain_event_metadata(
                     correlation_id=self._domain_event_session_id,
@@ -2402,11 +2376,11 @@ class Runner:
                 await self._emit_engine_snapshot_update(
                     node=node,
                     decision=decision,
-                    payload=self._build_pytest_engine_snapshot_payload(
+                    payload=self._build_engine_snapshot_payload(
                         node,
                         current_phase='setup',
                     ),
-                    snapshot_kind='pytest_runtime',
+                    snapshot_kind='engine_runtime',
                 )
                 execute_attributes = node_attributes | {
                     'cosecha.operation.name': 'test.execute',
@@ -2465,11 +2439,11 @@ class Runner:
                                 await self._emit_engine_snapshot_update(
                                     node=node,
                                     decision=decision,
-                                    payload=self._build_pytest_engine_snapshot_payload(
+                                    payload=self._build_engine_snapshot_payload(
                                         node,
                                         current_phase='call',
                                     ),
-                                    snapshot_kind='pytest_runtime',
+                                    snapshot_kind='engine_runtime',
                                 )
                                 self._runtime_provider.bind_execution_slot(
                                     node,
@@ -2536,11 +2510,11 @@ class Runner:
                                 await self._emit_engine_snapshot_update(
                                     node=node,
                                     decision=decision,
-                                    payload=self._build_pytest_engine_snapshot_payload(
+                                    payload=self._build_engine_snapshot_payload(
                                         node,
                                         current_phase='teardown',
                                     ),
-                                    snapshot_kind='pytest_runtime',
+                                    snapshot_kind='engine_runtime',
                                 )
                                 test_phase_durations[
                                     'finish_test'
@@ -3124,6 +3098,11 @@ class Runner:
             session_id=self._domain_event_session_id,
             trace_id=self.telemetry_stream.trace_id,
             root_path=str(self.config.root_path),
+            workspace_fingerprint=(
+                None
+                if self.config.workspace is None
+                else self.config.workspace.fingerprint
+            ),
             plan_id=self._last_plan_id,
             config_snapshot=self.config.snapshot(),
             capability_snapshots=self.describe_system_capabilities(),
@@ -3490,7 +3469,10 @@ class Runner:
                     list(operation.selection_labels) or None,
                     operation.test_limit,
                 )
-                return RunOperationResult(has_failures=self.has_failures())
+                return RunOperationResult(
+                    has_failures=self.has_failures(),
+                    total_tests=self._count_collected_tests(),
+                )
 
             result = await self._run_with_session(
                 operation.paths,
@@ -4122,6 +4104,15 @@ class Runner:
         return any(
             engine.collector.failed_files
             or any(test.has_failed for test in engine.get_collected_tests())
+            for engine in self.engines
+        )
+
+    def _count_collected_tests(self) -> int:
+        # Tests efectivamente recogidos por los engines. Los ficheros que
+        # fallaron en colleccion no cuentan como tests aqui; ya los cubre
+        # `has_failures()` como motivo de exit != 0.
+        return sum(
+            sum(1 for _ in engine.get_collected_tests())
             for engine in self.engines
         )
 

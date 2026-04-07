@@ -74,6 +74,38 @@ def test_engine_generate_new_context_keeps_resource_bindings(tmp_path: Path) -> 
     assert context.resource_bindings == (binding,)
 
 
+def test_engine_build_live_snapshot_payload_matches_runtime_contract(
+    tmp_path: Path,
+) -> None:
+    engine = PytestEngine('pytest', reporter=DummyReporter())
+    engine.initialize(build_config(tmp_path), '')
+    test_path = tmp_path / 'test_demo.py'
+    test_path.write_text('def test_case():\n    pass\n', encoding='utf-8')
+    test_item = PytestTestItem(
+        test_path,
+        PytestTestDefinition(
+            function_name='test_case',
+            line=1,
+            fixture_names=('db',),
+            usefixture_names=('cache',),
+            indirect_fixture_names=('request',),
+            pytest_runtime_reason='dynamic fixture',
+        ),
+        tmp_path,
+    )
+    node = SimpleNamespace(test=test_item)
+
+    payload = engine.build_live_snapshot_payload(node, 'call')
+
+    assert payload == {
+        'active_fixture_names': ('cache', 'db', 'request'),
+        'current_phase': 'call',
+        'nodeid': 'test_demo.py::test_case',
+        'runtime_mode': 'internal_fast_path',
+        'runtime_reason': 'dynamic fixture',
+    }
+
+
 def test_engine_start_test_handles_issue_paths(tmp_path: Path) -> None:
     engine = PytestEngine('pytest', reporter=DummyReporter())
     test_path = tmp_path / 'test_demo.py'

@@ -251,6 +251,26 @@ class GherkinEngine(Engine):
         await super().finish_session()
 
     @override
+    def build_live_snapshot_payload(
+        self,
+        node,
+        phase: str,
+    ) -> dict[str, object] | None:
+        feature = getattr(node.test, 'feature', None)
+        scenario = getattr(node.test, 'scenario', None)
+        if feature is None or scenario is None:
+            return None
+
+        all_steps = getattr(scenario, 'all_steps', ()) or ()
+        return {
+            'current_phase': phase,
+            'feature_name': getattr(feature, 'name', None),
+            'scenario_name': getattr(scenario, 'name', None),
+            'step_count': len(all_steps),
+            'test_path': str(getattr(node.test, 'path', '')),
+        }
+
+    @override
     async def generate_new_context(self, test: TestItem) -> Context:
         await self._ensure_context_registry_loaded()
 
