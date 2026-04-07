@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import types
 
 from pathlib import Path
@@ -199,6 +200,119 @@ def test_pytest_item_registers_runtime_nodeid_and_run_routes(
     assert calls == ['runtime', 'internal']
 
 
+def test_run_via_internal_fast_path_handles_xfail_and_xpass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = types.ModuleType('test_module')
+
+    async def _awaitable() -> None:
+        return None
+
+    monkeypatch.setattr(
+        items_module,
+        '_temporary_loaded_discovery_registry',
+        items_module.contextlib.nullcontext,
+    )
+    monkeypatch.setattr(PytestTestItem, '_load_fixture_modules', lambda *_args: ())
+    monkeypatch.setattr(
+        PytestTestItem,
+        '_build_fixture_values',
+        lambda *_args, **_kwargs: asyncio.sleep(0, result={}),
+    )
+    current_callable = lambda **_kwargs: None
+
+    def _load_test_callable(_self):
+        return (module, current_callable)
+
+    monkeypatch.setattr(
+        PytestTestItem,
+        '_load_test_callable',
+        _load_test_callable,
+    )
+
+    def _build_item(definition: PytestTestDefinition, callable_) -> PytestTestItem:
+        nonlocal current_callable
+        current_callable = callable_
+        return PytestTestItem(
+            tmp_path / 'tests' / 'test_demo.py',
+            definition,
+            tmp_path,
+        )
+
+    item_pass = _build_item(
+        PytestTestDefinition(function_name='test_case', line=1),
+        lambda **_kwargs: _awaitable(),
+    )
+    asyncio.run(item_pass._run_via_internal_fast_path(SimpleNamespace()))
+    assert item_pass.status is items_module.TestResultStatus.PASSED
+
+    item_no_xfail = _build_item(
+        PytestTestDefinition(function_name='test_case', line=1),
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError('no xfail')),
+    )
+    with pytest.raises(ValueError, match='no xfail'):
+        asyncio.run(item_no_xfail._run_via_internal_fast_path(SimpleNamespace()))
+
+    def _raise_value_error(**_kwargs):
+        raise ValueError('boom')
+
+    item_xfail = _build_item(
+        PytestTestDefinition(
+            function_name='test_case',
+            line=1,
+            xfail_reason='known failure',
+            xfail_run=True,
+            xfail_raises_paths=('ValueError',),
+        ),
+        _raise_value_error,
+    )
+    asyncio.run(item_xfail._run_via_internal_fast_path(SimpleNamespace()))
+    assert item_xfail.status is items_module.TestResultStatus.SKIPPED
+    assert item_xfail.message == 'Expected failure: known failure'
+
+    item_xpass = _build_item(
+        PytestTestDefinition(
+            function_name='test_case',
+            line=1,
+            xfail_reason='known failure',
+            xfail_run=True,
+            xfail_strict=False,
+        ),
+        lambda **_kwargs: None,
+    )
+    asyncio.run(item_xpass._run_via_internal_fast_path(SimpleNamespace()))
+    assert item_xpass.status is items_module.TestResultStatus.PASSED
+    assert item_xpass.message == 'Unexpected pass for xfail: known failure'
+
+    item_xpass_strict = _build_item(
+        PytestTestDefinition(
+            function_name='test_case',
+            line=1,
+            xfail_reason='known failure',
+            xfail_run=True,
+            xfail_strict=True,
+        ),
+        lambda **_kwargs: None,
+    )
+    asyncio.run(item_xpass_strict._run_via_internal_fast_path(SimpleNamespace()))
+    assert item_xpass_strict.status is items_module.TestResultStatus.FAILED
+    assert item_xpass_strict.message == 'Unexpected pass for xfail: known failure'
+
+    item_unexpected = _build_item(
+        PytestTestDefinition(
+            function_name='test_case',
+            line=1,
+            xfail_reason='known failure',
+            xfail_run=True,
+            xfail_raises_paths=('TypeError',),
+        ),
+        _raise_value_error,
+    )
+    with pytest.raises(ValueError, match='boom'):
+        asyncio.run(item_unexpected._run_via_internal_fast_path(SimpleNamespace()))
+
+
 def test_pytest_item_predicate_and_binding_helpers(tmp_path: Path) -> None:
     item = PytestTestItem(
         tmp_path / 'tests' / 'test_demo.py',
@@ -248,6 +362,87 @@ def test_pytest_item_predicate_and_binding_helpers(tmp_path: Path) -> None:
     )
     runtime_item.bind_runtime_adapter_profiles('pytest', (SimpleNamespace(),))
     assert runtime_item.get_resource_requirements() == (requirement,)
+
+
+def test_build_fixture_values_and_fixture_resolution_paths(tmp_path: Path) -> None:
+    module = types.ModuleType('fixture_module')
+
+    def dep_fixture() -> str:
+        return 'dep'
+
+    async def async_dep_fixture() -> str:
+        return 'async-dep'
+
+    def request_fixture(request, dep_fixture, async_dep_fixture):  # noqa: ANN001
+        return f'{request.param}:{dep_fixture}:{async_dep_fixture}'
+
+    def awaitable_fixture():
+        async def _co() -> str:
+            return 'awaited'
+
+        return _co()
+
+    module.dep_fixture = dep_fixture
+    module.async_dep_fixture = async_dep_fixture
+    module.request_fixture = request_fixture
+    module.awaitable_fixture = awaitable_fixture
+
+    item = PytestTestItem(
+        tmp_path / 'tests' / 'test_demo.py',
+        PytestTestDefinition(
+            function_name='test_case',
+            line=1,
+            fixture_names=('request_fixture',),
+            usefixture_names=('dep_fixture',),
+            indirect_fixture_names=('request_fixture',),
+            parameter_values=(('request_fixture', 'indirect'),),
+        ),
+        tmp_path,
+    )
+    item.bind_resource_bindings(
+        (
+            ResourceBindingSpec(
+                engine_type='pytest',
+                resource_name='workspace',
+                fixture_name='cosecha_workspace',
+            ),
+        ),
+    )
+    context = SimpleNamespace(resources={'workspace': 'ws'})
+    fixture_values = asyncio.run(
+        item._build_fixture_values(
+            (module,),
+            context,
+            indirect_parameter_values={'request_fixture': 'indirect'},
+        ),
+    )
+    assert fixture_values['request_fixture'] == 'indirect:dep:async-dep'
+
+    resource_value = asyncio.run(
+        item._resolve_fixture_value(
+            (),
+            'cosecha_workspace',
+            resolution_state=items_module._FixtureResolutionState(
+                context=context,
+                indirect_parameter_values={},
+                resolved_fixtures={},
+            ),
+        ),
+    )
+    assert resource_value == 'ws'
+
+    awaited_value = asyncio.run(
+        item._resolve_fixture_value(
+            (module,),
+            'awaitable_fixture',
+            resolution_state=items_module._FixtureResolutionState(
+                context=SimpleNamespace(),
+                indirect_parameter_values={},
+                resolved_fixtures={},
+            ),
+        ),
+    )
+    assert awaited_value == 'awaited'
 
 
 def test_load_test_callable_success_and_failures(tmp_path: Path) -> None:
@@ -345,6 +540,14 @@ def test_runtime_bridge_selection_and_bound_resource_resolution(tmp_path: Path) 
     assert item._resolve_bound_resource_fixture('cosecha_workspace', context) == (
         'workspace-resource'
     )
+    assert item._resolve_bound_resource_fixture(
+        'cosecha_workspace',
+        SimpleNamespace(resources='not-a-dict'),
+    ) is None
+    assert item._resolve_bound_resource_fixture(
+        'cosecha_workspace',
+        SimpleNamespace(resources={'other': 'resource'}),
+    ) is None
     assert item._resolve_bound_resource_fixture(
         build_runtime_canonical_binding_name('database/main'),
         context,
@@ -468,6 +671,7 @@ def test_xfail_helpers_and_exception_resolution() -> None:
     assert items_module._resolve_exception_type('CustomError', module) is RuntimeError
     assert items_module._resolve_exception_type('ValueError', module) is ValueError
     assert items_module._resolve_exception_type('value', module) is None
+    assert items_module._resolve_exception_type('CustomError.missing', module) is None
     assert items_module._resolve_exception_type('missing.path', module) is None
 
     assert items_module._matches_expected_xfail_exception(
@@ -487,3 +691,309 @@ def test_xfail_helpers_and_exception_resolution() -> None:
     ) is True
     assert items_module._cast_optional_str(None) is None
     assert items_module._cast_optional_str(123) == '123'
+
+
+def test_run_via_pytest_runtime_active_bridge_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = PytestTestItem(
+        tmp_path / 'tests' / 'test_demo.py',
+        PytestTestDefinition(function_name='test_case', line=1),
+        tmp_path,
+    )
+    monkeypatch.setattr(
+        PytestTestItem,
+        '_should_use_active_runtime_bridge',
+        lambda _self, _ctx: True,
+    )
+    monkeypatch.setattr(
+        items_module,
+        'run_pytest_runtime_batch_in_process',
+        lambda **_kwargs: {
+            item._build_pytest_nodeid(): {
+                'status': 'passed',
+                'message': None,
+                'failure_kind': None,
+                'error_code': None,
+            },
+        },
+    )
+    asyncio.run(item._run_via_pytest_runtime(SimpleNamespace(resources={})))
+    assert item.status == items_module.TestResultStatus.PASSED
+
+    monkeypatch.setattr(
+        items_module,
+        'run_pytest_runtime_batch_in_process',
+        lambda **_kwargs: {},
+    )
+    with pytest.raises(RuntimeError, match='active-session bridge did not return'):
+        asyncio.run(item._run_via_pytest_runtime(SimpleNamespace(resources={})))
+
+
+def test_run_via_pytest_runtime_cached_result_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = PytestTestItem(
+        tmp_path / 'tests' / 'test_demo.py',
+        PytestTestDefinition(function_name='test_case', line=1),
+        tmp_path,
+    )
+    key = item._pytest_runtime_batch_key()
+    nodeid = item._build_pytest_nodeid()
+    items_module._PYTEST_RUNTIME_RESULTS_BY_MODULE[key] = {
+        nodeid: {
+            'status': 'failed',
+            'message': 'boom',
+            'failure_kind': 'test',
+            'error_code': 'e1',
+        },
+    }
+    asyncio.run(item._run_via_pytest_runtime(None))
+    assert item.status == items_module.TestResultStatus.FAILED
+    assert key not in items_module._PYTEST_RUNTIME_RESULTS_BY_MODULE
+
+    items_module._PYTEST_RUNTIME_RESULTS_BY_MODULE[key] = {}
+    async def _empty_batch(_self):
+        return {}
+
+    monkeypatch.setattr(
+        PytestTestItem,
+        '_get_or_execute_pytest_runtime_batch',
+        _empty_batch,
+    )
+    with pytest.raises(RuntimeError, match='runtime adapter did not return a payload'):
+        asyncio.run(item._run_via_pytest_runtime(None))
+
+
+def test_execute_pytest_runtime_batch_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeProcess:
+        def __init__(self, returncode: int, stdout: bytes, stderr: bytes) -> None:
+            self.returncode = returncode
+            self._stdout = stdout
+            self._stderr = stderr
+
+        async def communicate(self):
+            return (self._stdout, self._stderr)
+
+    class _FakeTmpDir:
+        def __init__(self, path: Path) -> None:
+            self._path = path
+
+        def __enter__(self) -> str:
+            self._path.mkdir(parents=True, exist_ok=True)
+            return str(self._path)
+
+        def __exit__(self, *_args) -> bool:
+            return False
+
+    item = PytestTestItem(
+        tmp_path / 'tests' / 'test_demo.py',
+        PytestTestDefinition(function_name='test_case', line=1, requires_pytest_runtime=True),
+        tmp_path,
+    )
+    item.bind_runtime_adapter_profiles(
+        'pytest',
+        (SimpleNamespace(to_dict=lambda: {'id': 'default'}),),
+    )
+    runtime_tmp = tmp_path / '.runtime-tmp'
+    monkeypatch.setattr(
+        items_module.tempfile,
+        'TemporaryDirectory',
+        lambda: _FakeTmpDir(runtime_tmp),
+    )
+
+    async def _write_success(*command, **_kwargs):
+        result_path = Path(command[command.index('--result-path') + 1])
+        result_path.write_text(
+            json.dumps(
+                {
+                    item._build_pytest_nodeid(): {
+                        'status': 'passed',
+                        'message': None,
+                    },
+                    7: {'ignored': True},
+                },
+                ensure_ascii=False,
+            ),
+            encoding='utf-8',
+        )
+        return _FakeProcess(0, b'', b'')
+
+    monkeypatch.setattr(
+        items_module.asyncio,
+        'create_subprocess_exec',
+        _write_success,
+    )
+    payload = asyncio.run(item._execute_pytest_runtime_batch())
+    assert item._build_pytest_nodeid() in payload
+    assert '7' in payload
+
+    async def _missing_result(*_command, **_kwargs):
+        return _FakeProcess(0, b'stdout', b'stderr')
+
+    (runtime_tmp / 'pytest-runtime-result.json').unlink(missing_ok=True)
+    monkeypatch.setattr(
+        items_module.asyncio,
+        'create_subprocess_exec',
+        _missing_result,
+    )
+    with pytest.raises(RuntimeError, match='did not produce a result'):
+        asyncio.run(item._execute_pytest_runtime_batch())
+
+    async def _unsupported_code(*command, **_kwargs):
+        result_path = Path(command[command.index('--result-path') + 1])
+        result_path.write_text('{}', encoding='utf-8')
+        return _FakeProcess(2, b'', b'')
+
+    monkeypatch.setattr(
+        items_module.asyncio,
+        'create_subprocess_exec',
+        _unsupported_code,
+    )
+    with pytest.raises(RuntimeError, match='unsupported exit code'):
+        asyncio.run(item._execute_pytest_runtime_batch())
+
+
+def test_get_or_execute_pytest_runtime_batch_reuses_cached_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = PytestTestItem(
+        tmp_path / 'tests' / 'test_demo.py',
+        PytestTestDefinition(function_name='test_case', line=1),
+        tmp_path,
+    )
+    key = item._pytest_runtime_batch_key()
+    expected = {item._build_pytest_nodeid(): {'status': 'passed'}}
+
+    class _DoneTask:
+        def __await__(self):
+            async def _co():
+                return expected
+
+            return _co().__await__()
+
+        def done(self) -> bool:
+            return True
+
+    items_module._PYTEST_RUNTIME_TASKS_BY_MODULE[key] = _DoneTask()
+    payload = asyncio.run(item._get_or_execute_pytest_runtime_batch())
+    assert payload == expected
+    assert key not in items_module._PYTEST_RUNTIME_TASKS_BY_MODULE
+
+    async def _execute(_self):
+        return expected
+
+    monkeypatch.setattr(
+        PytestTestItem,
+        '_execute_pytest_runtime_batch',
+        _execute,
+    )
+    payload = asyncio.run(item._get_or_execute_pytest_runtime_batch())
+    assert payload == expected
+
+
+def test_resolve_fixture_value_and_finalizer_error_paths(tmp_path: Path) -> None:
+    module = types.ModuleType('fixture_module')
+
+    def double_yield_fixture():
+        yield 'first'
+        yield 'second'
+
+    async def double_async_yield_fixture():
+        yield 'first'
+        yield 'second'
+
+    module.double_yield_fixture = double_yield_fixture
+    module.double_async_yield_fixture = double_async_yield_fixture
+
+    item = PytestTestItem(
+        tmp_path / 'tests' / 'test_demo.py',
+        PytestTestDefinition(function_name='test_case', line=1),
+        tmp_path,
+    )
+    finalizers: list[object] = []
+    resolution_state = items_module._FixtureResolutionState(
+        context=SimpleNamespace(add_finalizer=lambda finalizer: finalizers.append(finalizer)),
+        indirect_parameter_values={},
+        resolved_fixtures={},
+    )
+
+    value = asyncio.run(
+        item._resolve_fixture_value(
+            (module,),
+            'double_yield_fixture',
+            resolution_state=resolution_state,
+        ),
+    )
+    assert value == 'first'
+    with pytest.raises(RuntimeError, match='yielded more than once'):
+        asyncio.run(finalizers.pop()())
+
+    async_value = asyncio.run(
+        item._resolve_fixture_value(
+            (module,),
+            'double_async_yield_fixture',
+            resolution_state=resolution_state,
+        ),
+    )
+    assert async_value == 'first'
+    async def _run_async_finalizer_in_single_loop() -> None:
+        local_finalizers: list[object] = []
+        yielded = await item._materialize_async_generator_fixture(
+            'double_async_yield_fixture',
+            double_async_yield_fixture(),
+            context=SimpleNamespace(
+                add_finalizer=lambda finalizer: local_finalizers.append(finalizer),
+            ),
+        )
+        assert yielded == 'first'
+        await local_finalizers[0]()
+
+    with pytest.raises(
+        RuntimeError,
+        match='async yield fixture yielded more than once',
+    ):
+        asyncio.run(_run_async_finalizer_in_single_loop())
+
+    cached_value = asyncio.run(
+        item._resolve_fixture_value(
+            (module,),
+            'double_yield_fixture',
+            resolution_state=resolution_state,
+        ),
+    )
+    assert cached_value == 'first'
+
+    cyclic_state = items_module._FixtureResolutionState(
+        context=SimpleNamespace(),
+        indirect_parameter_values={},
+        resolved_fixtures={},
+        active_fixtures=('fixture_a',),
+    )
+    with pytest.raises(RuntimeError, match='cyclic fixture dependencies'):
+        asyncio.run(
+            item._resolve_fixture_value(
+                (module,),
+                'fixture_a',
+                resolution_state=cyclic_state,
+            ),
+        )
+
+    with pytest.raises(RuntimeError, match='Unable to resolve pytest fixture'):
+        asyncio.run(
+            item._resolve_fixture_value(
+                (module,),
+                'missing_fixture',
+                resolution_state=items_module._FixtureResolutionState(
+                    context=SimpleNamespace(resources={}),
+                    indirect_parameter_values={},
+                    resolved_fixtures={},
+                ),
+            ),
+        )

@@ -773,6 +773,8 @@ def test_build_draft_validation_issues_traverses_functions_and_test_classes(
     module = ast.parse(
         '\n'.join(
             (
+                'value = 1',
+                '',
                 'def helper():',
                 '    pass',
                 '',
@@ -780,6 +782,7 @@ def test_build_draft_validation_issues_traverses_functions_and_test_classes(
                 '    pass',
                 '',
                 'class TestSuite:',
+                '    marker = True',
                 '    def test_method(self):',
                 '        pass',
                 '',
@@ -835,6 +838,65 @@ def test_build_draft_validation_issues_traverses_functions_and_test_classes(
     assert 'fixture_issue' in issue_codes
     assert 'issue_test_top_level' in issue_codes
     assert 'issue_test_method' in issue_codes
+
+
+def test_build_test_node_issues_appends_xfail_and_skip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = PytestEngine('pytest', reporter=DummyReporter())
+    engine.initialize(build_config(tmp_path), '')
+    node = ast.parse('def test_case():\n    pass\n').body[0]
+    assert isinstance(node, ast.FunctionDef)
+    validation_context = _build_validation_context()
+
+    monkeypatch.setattr(
+        engine_module.PytestEngine,
+        '_build_pytest_plugins_runtime_issue',
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        engine_module.PytestEngine,
+        '_build_usefixtures_issue',
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        engine_module.PytestEngine,
+        '_build_xfail_issue',
+        lambda *_args, **_kwargs: DraftValidationIssue(
+            code='xfail',
+            message='xfail issue',
+            severity='warning',
+            line=node.lineno,
+        ),
+    )
+    monkeypatch.setattr(
+        engine_module.PytestEngine,
+        '_build_skip_issue',
+        lambda *_args, **_kwargs: DraftValidationIssue(
+            code='skip',
+            message='skip issue',
+            severity='warning',
+            line=node.lineno,
+        ),
+    )
+    monkeypatch.setattr(
+        engine_module.PytestEngine,
+        '_build_parametrize_issue',
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        engine_module.PytestEngine,
+        '_build_signature_issue',
+        lambda *_args, **_kwargs: None,
+    )
+
+    issues = engine._build_test_node_issues(
+        node,
+        fixtures={},
+        validation_context=validation_context,
+    )
+    assert [issue.code for issue in issues] == ['xfail', 'skip']
 
 
 def test_build_test_node_issues_short_circuits_on_parametrize_issue(
@@ -1021,3 +1083,435 @@ def test_resolve_fixture_definitions_from_visible_source_records(
     assert len(result) == 1
     assert result[0].function_name == 'workspace_fixture'
     assert result[0].line == 12
+
+
+def test_engine_dependency_descriptor_exposed() -> None:
+    engine = PytestEngine('pytest', reporter=DummyReporter())
+    dependencies = engine.describe_engine_dependencies()
+    assert len(dependencies) == 2
+    assert dependencies[0].target_engine_name == 'gherkin'
+
+
+def test_build_signature_parametrize_and_issue_helpers_non_test_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = PytestEngine('pytest', reporter=DummyReporter())
+    engine.initialize(build_config(tmp_path), '')
+    helper_node = ast.parse('def helper():\n    pass\n').body[0]
+    assert isinstance(helper_node, ast.FunctionDef)
+    validation_context = _build_validation_context()
+
+    assert (
+        engine._build_signature_issue(
+            helper_node,
+            fixtures={},
+            validation_context=validation_context,
+        )
+        is None
+    )
+    assert (
+        engine._build_parametrize_issue(
+            helper_node,
+            marker_aliases={'pytest'},
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is None
+    )
+    assert (
+        engine._build_usefixtures_issue(
+            helper_node,
+            marker_aliases={'pytest'},
+        )
+        is None
+    )
+    assert (
+        engine._build_xfail_issue(
+            helper_node,
+            marker_aliases={'pytest'},
+            validation_context=validation_context,
+        )
+        is None
+    )
+    assert (
+        engine._build_skip_issue(
+            helper_node,
+            marker_aliases={'pytest'},
+            validation_context=validation_context,
+        )
+        is None
+    )
+
+    monkeypatch.setattr(
+        engine_module,
+        '_supports_pytest_callable_signature',
+        lambda *_args, **_kwargs: True,
+    )
+    test_node = ast.parse('def test_case():\n    pass\n').body[0]
+    assert isinstance(test_node, ast.FunctionDef)
+    assert (
+        engine._build_signature_issue(
+            test_node,
+            fixtures={},
+            validation_context=validation_context,
+        )
+        is None
+    )
+    method_node = ast.parse(
+        'class TestSuite:\n    def test_case(self, fixture_a):\n        pass\n',
+    ).body[0].body[0]
+    assert isinstance(method_node, ast.FunctionDef)
+    monkeypatch.setattr(
+        engine_module,
+        '_supports_pytest_callable_signature',
+        lambda *_args, **_kwargs: False,
+    )
+    method_issue = engine._build_signature_issue(
+        method_node,
+        class_name='TestSuite',
+        fixtures={},
+        validation_context=validation_context,
+    )
+    assert method_issue is not None
+    assert 'single `self` parameter plus fixture parameters' in (
+        method_issue.message
+    )
+
+    monkeypatch.setattr(
+        engine_module,
+        '_build_usefixtures_decision',
+        lambda *_args, **_kwargs: SimpleNamespace(
+            issue_code=None,
+            issue_message=None,
+            issue_line=None,
+        ),
+    )
+    assert (
+        engine._build_usefixtures_issue(
+            test_node,
+            marker_aliases={'pytest'},
+        )
+        is None
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_build_static_xfail_decision',
+        lambda *_args, **_kwargs: SimpleNamespace(
+            issue_code=None,
+            requires_pytest_runtime=False,
+            issue_message=None,
+            runtime_reason=None,
+            issue_line=None,
+        ),
+    )
+    assert (
+        engine._build_xfail_issue(
+            test_node,
+            marker_aliases={'pytest'},
+            validation_context=validation_context,
+        )
+        is None
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_build_static_skip_decision',
+        lambda *_args, **_kwargs: SimpleNamespace(
+            issue_code=None,
+            requires_pytest_runtime=False,
+            issue_message=None,
+            runtime_reason=None,
+            issue_line=None,
+        ),
+    )
+    assert (
+        engine._build_skip_issue(
+            test_node,
+            marker_aliases={'pytest'},
+            validation_context=validation_context,
+        )
+        is None
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_parse_parametrize_specs',
+        lambda *_args, **_kwargs: SimpleNamespace(
+            issue_code=None,
+            issue_message=None,
+            issue_line=None,
+            specs=(),
+        ),
+    )
+    assert (
+        engine._build_parametrize_issue(
+            test_node,
+            marker_aliases={'pytest'},
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is None
+    )
+
+
+def test_build_fixture_issue_supported_and_fallback_messages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = PytestEngine('pytest', reporter=DummyReporter())
+    engine.initialize(build_config(tmp_path), '')
+    fixture = SimpleNamespace(function_name='fixture_a', line=5)
+
+    monkeypatch.setattr(
+        engine_module,
+        '_is_supported_fixture_definition',
+        lambda *_args, **_kwargs: True,
+    )
+    assert engine._build_fixture_issue(fixture, fixtures={}) is None
+
+    monkeypatch.setattr(
+        engine_module,
+        '_is_supported_fixture_definition',
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_get_fixture_support_reason',
+        lambda *_args, **_kwargs: 'non_cyclic',
+    )
+    issue = engine._build_fixture_issue(fixture, fixtures={})
+    assert issue is not None
+    assert 'supports fixtures whose unresolved dependencies' in issue.message
+
+
+def test_resolve_fixture_and_imported_definition_continue_branches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_path = tmp_path / 'tests' / 'test_demo.py'
+    test_path.parent.mkdir(parents=True, exist_ok=True)
+    test_path.write_text('', encoding='utf-8')
+    source_path = tmp_path / 'source_defs.py'
+    source_path.write_text('', encoding='utf-8')
+    context = engine_module._PytestDefinitionResolutionContext(
+        engine_name='pytest',
+        test_path=test_path,
+        root_path=tmp_path,
+    )
+
+    monkeypatch.setattr(
+        engine_module,
+        '_resolve_imported_fixture_binding_definition',
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_discover_visible_fixture_source_paths',
+        lambda *_args, **_kwargs: (source_path,),
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_discover_conftest_paths',
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_build_fixture_source_metadata',
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_discover_fixture_knowledge_records',
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(
+                function_name='other_fixture',
+                line=1,
+                source_category='fixture',
+                provider_kind='k',
+                provider_name='p',
+                documentation=None,
+            ),
+        ),
+    )
+    assert (
+        engine_module._resolve_fixture_definitions(
+            context=context,
+            test_path=test_path,
+            fixture_name='workspace_fixture',
+        )
+        == ()
+    )
+
+    configured_path = tmp_path / 'configured.py'
+    configured_path.write_text('', encoding='utf-8')
+    context_with_config = engine_module._PytestDefinitionResolutionContext(
+        engine_name='pytest',
+        test_path=test_path,
+        root_path=tmp_path,
+        configured_definition_paths=(configured_path,),
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_discover_imported_fixture_bindings',
+        lambda *_args, **_kwargs: {
+            'fixture_name': SimpleNamespace(
+                source_path=None,
+                function_name='provider',
+            ),
+        },
+    )
+    assert (
+        engine_module._resolve_imported_fixture_binding_definition(
+            test_path=test_path,
+            fixture_name='fixture_name',
+            context=context_with_config,
+        )
+        is None
+    )
+
+    monkeypatch.setattr(
+        engine_module,
+        '_discover_imported_fixture_bindings',
+        lambda *_args, **_kwargs: {
+            'fixture_name': SimpleNamespace(
+                source_path=str(configured_path),
+                function_name='provider',
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_discover_fixture_knowledge_records',
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(
+                function_name='other_provider',
+                line=3,
+                source_category='fixture',
+                provider_kind='k',
+                provider_name='p',
+                documentation=None,
+            ),
+        ),
+    )
+    assert (
+        engine_module._resolve_imported_fixture_binding_definition(
+            test_path=test_path,
+            fixture_name='fixture_name',
+            context=context_with_config,
+        )
+        is None
+    )
+
+
+def test_resolve_imported_fixture_binding_definition_continue_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_path = tmp_path / 'tests' / 'test_demo.py'
+    test_path.parent.mkdir(parents=True, exist_ok=True)
+    test_path.write_text('', encoding='utf-8')
+    configured_path = tmp_path / 'configured.py'
+    configured_path.write_text('', encoding='utf-8')
+    conftest_path = tmp_path / 'tests' / 'conftest.py'
+    context = engine_module._PytestDefinitionResolutionContext(
+        engine_name='pytest',
+        test_path=test_path,
+        root_path=tmp_path,
+        configured_definition_paths=(configured_path,),
+    )
+    binding_source = tmp_path / 'bindings.py'
+    binding_source.write_text('', encoding='utf-8')
+
+    monkeypatch.setattr(
+        engine_module,
+        '_discover_conftest_paths',
+        lambda *_args, **_kwargs: (conftest_path,),
+    )
+
+    def _discover_imported_bindings(source_path, **_kwargs):
+        if Path(source_path).resolve() == test_path.resolve():
+            return {}
+        return {
+            'target_fixture': SimpleNamespace(
+                source_path=str(binding_source),
+                function_name='target_fixture',
+            ),
+        }
+
+    monkeypatch.setattr(
+        engine_module,
+        '_discover_imported_fixture_bindings',
+        _discover_imported_bindings,
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_build_fixture_source_metadata',
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_discover_fixture_knowledge_records',
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(
+                function_name='other_fixture',
+                line=7,
+                source_category='fixture',
+                provider_kind='definition_path',
+                provider_name='definitions.py',
+                documentation=None,
+            ),
+        ),
+    )
+
+    result = engine_module._resolve_imported_fixture_binding_definition(
+        test_path=test_path,
+        fixture_name='target_fixture',
+        context=context,
+    )
+    assert result is None
+
+
+def test_resolve_test_definitions_and_docs_continue_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_path = tmp_path / 'tests' / 'test_docs.py'
+    test_path.parent.mkdir(parents=True, exist_ok=True)
+    test_path.write_text(
+        '\n'.join(
+            (
+                'value = 1',
+                '',
+                'class TestSuite:',
+                '    value = 2',
+                '    def test_case(self):',
+                '        """case doc"""',
+                '        pass',
+            ),
+        ),
+        encoding='utf-8',
+    )
+    real_discover_docs = engine_module._discover_test_documentation
+    monkeypatch.setattr(
+        engine_module,
+        '_discover_pytest_tests',
+        lambda *_args, **_kwargs: (
+            PytestTestDefinition(function_name='test_case', line=1),
+        ),
+    )
+    monkeypatch.setattr(
+        engine_module,
+        '_discover_test_documentation',
+        lambda *_args, **_kwargs: {(None, 'test_case'): 'doc'},
+    )
+    assert (
+        engine_module._resolve_test_definitions(
+            engine_name='pytest',
+            test_path=test_path,
+            test_name='other_name',
+            root_path=tmp_path,
+        )
+        == ()
+    )
+
+    docs = real_discover_docs(test_path)
+    assert docs[('TestSuite', 'test_case')] == 'case doc'
