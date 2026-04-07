@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from cosecha.core.engines.base import ExecutionContextMetadata
 from cosecha.core.location import Location
 from cosecha.core.manifest_types import ResourceBindingSpec
 from cosecha.engine.gherkin.context import Context, ContextRegistry
+from cosecha.engine.gherkin.managers import BaseContextManager
 from cosecha.engine.gherkin.models import (
     Cell,
     DataTable,
@@ -175,3 +178,135 @@ def test_context_notifies_step_observer_with_execution_metadata() -> None:
     assert observed[0][1].node_stable_id == 'stable-node-1'
     assert observed[1][0] == 'finished'
     assert observed[1][2] == 'passed'
+
+
+def test_context_registry_duplicate_names_raise_key_error() -> None:
+    registry = ContextRegistry()
+    shared = object()
+    registry.add('layout', 'item', shared)
+    registry.add('layout', 'item', shared)
+    assert registry.get_items('layout') == [('item', shared)]
+    assert registry.get_items('other') == []
+
+    with pytest.raises(KeyError, match='Duplicated name'):
+        registry.add('layout', 'item', object())
+
+
+def test_context_property_access_raises_before_set_step() -> None:
+    context = Context(ContextRegistry(), StepRegistry(), {})
+
+    with pytest.raises(RuntimeError, match='Context.feature accessed'):
+        _ = context.feature
+    with pytest.raises(RuntimeError, match='Context.scenario accessed'):
+        _ = context.scenario
+    with pytest.raises(RuntimeError, match='Context.step accessed'):
+        _ = context.step
+
+
+def test_context_property_access_error_includes_existing_keys() -> None:
+    context = Context(ContextRegistry(), StepRegistry(), {})
+    context['db'] = object()
+
+    with pytest.raises(RuntimeError, match='context keys:'):
+        _ = context.step
+
+
+def test_context_cleanup_aggregates_manager_errors() -> None:
+    class _FailingManager(BaseContextManager):
+        def cleanup(self) -> None:
+            raise RuntimeError('cleanup failed')
+
+    context = Context(ContextRegistry(), StepRegistry(), {})
+    context.setup_manager(_FailingManager)
+
+    with pytest.raises(ExceptionGroup, match='Errors during context cleanup'):
+        asyncio.run(context.cleanup())
+
+
+def test_context_setup_manager_reuses_instances_and_tmp_path_manager() -> None:
+    class _NoopManager(BaseContextManager):
+        def cleanup(self) -> None:
+            return
+
+    context = Context(ContextRegistry(), StepRegistry(), {})
+
+    first_manager = context.setup_manager(_NoopManager)
+    second_manager = context.setup_manager(_NoopManager)
+    assert first_manager is second_manager
+
+    tmp_path = context.tmp_path
+    assert tmp_path.exists()
+    assert tmp_path.is_dir()
+    asyncio.run(context.cleanup())
+    assert not tmp_path.exists()
+
+
+def test_context_set_resources_skips_incomplete_bindings() -> None:
+    context = Context(
+        ContextRegistry(),
+        StepRegistry(),
+        {},
+        resource_bindings=(
+            ResourceBindingSpec(
+                engine_type='gherkin',
+                resource_name='cache',
+                layout='resource',
+                alias='cache_alias',
+            ),
+            ResourceBindingSpec(
+                engine_type='gherkin',
+                resource_name='other-resource',
+                layout='resource',
+                alias='other_alias',
+            ),
+            ResourceBindingSpec(
+                engine_type='gherkin',
+                resource_name='cache',
+                layout=None,
+                alias='ignored_alias',
+            ),
+            ResourceBindingSpec(
+                engine_type='gherkin',
+                resource_name='cache',
+                layout='resource',
+                alias=None,
+            ),
+        ),
+    )
+
+    context.set_resources({'cache': 'cache-handle'})
+
+    assert context.registry.get('resource', 'cache_alias') == 'cache-handle'
+    assert context.registry.get('resource', 'other_alias') is None
+    assert context.registry.get('resource', 'ignored_alias') is None
+
+
+def test_context_notifies_noop_when_step_callback_missing() -> None:
+    context = Context(ContextRegistry(), StepRegistry(), {})
+    step = _create_step(None)
+
+    asyncio.run(context.notify_step_started(step))
+    asyncio.run(
+        context.notify_step_finished(
+            step,
+            status='passed',
+            message='ok',
+        ),
+    )
+
+
+def test_context_property_access_returns_bound_values_after_set_step() -> None:
+    step_registry = StepRegistry()
+    coercions = {'int': int}
+    context = Context(ContextRegistry(), step_registry, coercions)
+    feature = _create_feature()
+    scenario = _create_scenario()
+    step = _create_step(None)
+
+    context.set_step(feature, scenario, step)
+
+    assert context.feature is feature
+    assert context.scenario is scenario
+    assert context.step is step
+    assert context.step_registry is step_registry
+    assert context.coercions is coercions

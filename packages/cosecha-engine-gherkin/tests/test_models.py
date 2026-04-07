@@ -8,6 +8,7 @@ from cosecha.core.location import Location
 from cosecha.engine.gherkin.models import (
     Background,
     Cell,
+    Heading,
     HeadingCell,
     Row,
     Scenario,
@@ -106,3 +107,31 @@ def test_scenario_all_steps_includes_background_steps() -> None:
     )
 
     assert scenario.all_steps == (background_step, scenario_step)
+
+
+def test_heading_names_and_row_getitem_behaviour() -> None:
+    heading_cell = HeadingCell(
+        location=Location(Path('demo.feature'), 1),
+        name='username',
+    )
+    heading = Heading(
+        id='heading-1',
+        location=Location(Path('demo.feature'), 1),
+        cells=(heading_cell,),
+    )
+    row = Row(
+        id='row-1',
+        location=Location(Path('demo.feature'), 2),
+        cells=(
+            Cell(
+                location=Location(Path('demo.feature'), 2),
+                heading=heading_cell,
+                value='uve',
+            ),
+        ),
+    )
+
+    assert heading.names == ('username',)
+    assert row['username'] == 'uve'
+    with pytest.raises(KeyError, match='Unknown field "missing"'):
+        _ = row['missing']

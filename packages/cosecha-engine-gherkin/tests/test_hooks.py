@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
+
+import pytest
 
 from cosecha.core.manifest_symbols import SymbolRef
 from cosecha.core.manifest_types import RegistryLayoutSpec
@@ -10,6 +13,10 @@ from cosecha.engine.gherkin.engine import GherkinEngine
 from cosecha.engine.gherkin.hooks import (
     GherkinLibraryHook,
     GherkinRegistryLoader,
+    _iter_compatible_module_globs,
+    _iter_module_names,
+    _load_registry_entries_sync,
+    _matches_layout_item,
     _registry_loader_cache,
 )
 from cosecha_internal.testkit import DummyReporter, build_config
@@ -152,3 +159,78 @@ def test_library_hook_populates_context_registry_from_registry_loader(
     loaded_item = engine.context_registry.get('helper', 'RootHelper')
     assert loaded_item is not None
     assert loaded_item.__name__ == 'RootHelper'
+
+
+def test_hooks_helpers_and_guard_branches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    assert _iter_compatible_module_globs('demo.items') == (
+        'demo.items',
+        'demo.item',
+    )
+    assert _iter_compatible_module_globs('demo.one') == ('demo.one',)
+
+    class _Base:
+        pass
+
+    class _Child(_Base):
+        pass
+
+    assert _matches_layout_item(_Base, base_class=_Base, match_mode='exact')
+    assert not _matches_layout_item(_Child, base_class=_Base, match_mode='exact')
+
+    fake_layout = SimpleNamespace(module_globs=('demo_pkg', 'demo_pkg.**'))
+    fake_module = SimpleNamespace(__name__='demo_pkg', __path__=None)
+    monkeypatch.setattr(
+        'cosecha.engine.gherkin.hooks.importlib.import_module',
+        lambda _name: fake_module,
+    )
+    module_names = _iter_module_names((fake_layout,))
+    assert module_names == ('demo_pkg',)
+
+    invalid_layout = SimpleNamespace(
+        name='invalid',
+        base=SimpleNamespace(resolve=lambda **_kwargs: 123),
+        module_globs=('demo_pkg.**',),
+        match='subclass',
+    )
+    with pytest.raises(
+        TypeError,
+        match='Registry layout base must resolve to a class',
+    ):
+        _load_registry_entries_sync((invalid_layout,), root_path=tmp_path)
+
+
+def test_library_hook_before_session_start_short_circuits(
+    tmp_path: Path,
+) -> None:
+    hook = GherkinLibraryHook(
+        registry_entries=(('layout', 'Item', object()),),
+    )
+    engine = GherkinEngine(
+        'gherkin',
+        reporter=DummyReporter(),
+        hooks=(hook,),
+    )
+    engine.initialize(build_config(tmp_path), '')
+
+    original_entries = hook.registry_entries
+    asyncio.run(hook.before_session_start(engine))
+    assert hook.registry_entries is original_entries
+
+
+def test_library_hook_before_session_start_skips_when_context_registry_missing(
+    tmp_path: Path,
+) -> None:
+    hook = GherkinLibraryHook()
+    engine = GherkinEngine(
+        'gherkin',
+        reporter=DummyReporter(),
+        hooks=(hook,),
+    )
+    engine.initialize(build_config(tmp_path), '')
+    engine.context_registry = None  # type: ignore[assignment]
+
+    asyncio.run(hook.before_session_start(engine))
+    assert hook.registry_entries == ()
