@@ -388,3 +388,424 @@ def test_runtime_string_condition_and_skip_operands() -> None:
         literal_bindings=literal_bindings,
         expression_bindings=expression_bindings,
     ) == sys.implementation.name
+
+
+def test_skipif_and_marker_reason_fallback_paths() -> None:
+    non_call_skipif = _first_decorator(
+        '\n'.join(
+            (
+                '@pytest.mark.skipif',
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    non_call_decision = pytest_collector_module._parse_skipif_decorator(
+        non_call_skipif,
+        literal_bindings={},
+        expression_bindings={},
+    )
+    assert non_call_decision.issue_code == 'pytest_unsupported_skip_condition'
+
+    missing_condition = _first_decorator(
+        '\n'.join(
+            (
+                "@pytest.mark.skipif(reason='reason only')",
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    missing_condition_decision = pytest_collector_module._parse_skipif_decorator(
+        missing_condition,
+        literal_bindings={},
+        expression_bindings={},
+    )
+    assert missing_condition_decision.issue_code == (
+        'pytest_unsupported_skip_condition'
+    )
+
+    dynamic_condition = _first_decorator(
+        '\n'.join(
+            (
+                '@pytest.mark.skipif(runtime_flag)',
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    dynamic_condition_decision = pytest_collector_module._parse_skipif_decorator(
+        dynamic_condition,
+        literal_bindings={},
+        expression_bindings={},
+    )
+    assert dynamic_condition_decision.requires_pytest_runtime is True
+
+    positional_reason = _first_decorator(
+        '\n'.join(
+            (
+                "@pytest.mark.skipif(True, 'positional reason')",
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    assert isinstance(positional_reason, ast.Call)
+    assert (
+        pytest_collector_module._extract_marker_reason(
+            positional_reason,
+            default='default',
+            literal_bindings={},
+        )
+        == 'positional reason'
+    )
+
+    non_string_positional_reason = _first_decorator(
+        '\n'.join(
+            (
+                '@pytest.mark.skipif(True, runtime_reason)',
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    assert isinstance(non_string_positional_reason, ast.Call)
+    assert (
+        pytest_collector_module._extract_marker_reason(
+            non_string_positional_reason,
+            default='default',
+            literal_bindings={},
+        )
+        == 'default'
+    )
+
+
+def test_xfail_runtime_and_exception_path_guards() -> None:
+    xfail_without_condition = _first_decorator(
+        '\n'.join(
+            (
+                "@pytest.mark.xfail(reason='known')",
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    assert isinstance(xfail_without_condition, ast.Call)
+    assert (
+        pytest_collector_module._validate_xfail_condition(
+            xfail_without_condition,
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is None
+    )
+
+    string_condition = _first_decorator(
+        '\n'.join(
+            (
+                "@pytest.mark.xfail('sys.platform == \"darwin\"')",
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    assert isinstance(string_condition, ast.Call)
+    string_condition_decision = pytest_collector_module._validate_xfail_condition(
+        string_condition,
+        literal_bindings={},
+        expression_bindings={},
+    )
+    assert string_condition_decision is not None
+    assert string_condition_decision.requires_pytest_runtime is True
+
+    dynamic_condition = _first_decorator(
+        '\n'.join(
+            (
+                '@pytest.mark.xfail(runtime_flag)',
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    assert isinstance(dynamic_condition, ast.Call)
+    dynamic_condition_decision = pytest_collector_module._validate_xfail_condition(
+        dynamic_condition,
+        literal_bindings={},
+        expression_bindings={},
+    )
+    assert dynamic_condition_decision is not None
+    assert dynamic_condition_decision.requires_pytest_runtime is True
+
+    strict_dynamic = _first_decorator(
+        '\n'.join(
+            (
+                '@pytest.mark.xfail(True, strict=runtime_flag)',
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    strict_dynamic_decision = pytest_collector_module._parse_xfail_decorator(
+        strict_dynamic,
+        literal_bindings={},
+        expression_bindings={},
+    )
+    assert strict_dynamic_decision.requires_pytest_runtime is True
+
+    raises_dynamic = _first_decorator(
+        '\n'.join(
+            (
+                '@pytest.mark.xfail(True, raises=(ValueError, runtime_error()))',
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    raises_dynamic_decision = pytest_collector_module._parse_xfail_decorator(
+        raises_dynamic,
+        literal_bindings={},
+        expression_bindings={},
+    )
+    assert raises_dynamic_decision.requires_pytest_runtime is True
+
+    raises_type = _first_decorator(
+        '\n'.join(
+            (
+                '@pytest.mark.xfail(True, raises=RuntimeError)',
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    assert isinstance(raises_type, ast.Call)
+    assert pytest_collector_module._extract_xfail_raises_paths(
+        raises_type,
+        literal_bindings={'RuntimeError': RuntimeError},
+        expression_bindings={},
+    ) == ('RuntimeError',)
+
+    assert (
+        pytest_collector_module._extract_exception_symbol_path(
+            ast.parse('1').body[0].value,  # type: ignore[attr-defined]
+        )
+        is None
+    )
+    assert (
+        pytest_collector_module._extract_exception_symbol_path(
+            ast.parse('runtime_error().value').body[0].value,  # type: ignore[attr-defined]
+        )
+        is None
+    )
+    assert (
+        pytest_collector_module._extract_exception_symbol_paths(
+            ast.parse('(ValueError, runtime_error())').body[0].value,  # type: ignore[attr-defined]
+        )
+        is None
+    )
+
+
+def test_static_skip_condition_compare_failure_paths() -> None:
+    assert (
+        pytest_collector_module._evaluate_static_skip_condition(
+            ast.parse('True and runtime_flag').body[0].value,  # type: ignore[attr-defined]
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is None
+    )
+    assert (
+        pytest_collector_module._evaluate_static_skip_condition(
+            ast.parse('not runtime_flag').body[0].value,  # type: ignore[attr-defined]
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is None
+    )
+
+    invalid_boolop_node = ast.BoolOp(
+        op=ast.BitAnd(),  # type: ignore[arg-type]
+        values=[ast.Constant(value=True), ast.Constant(value=False)],
+    )
+    assert (
+        pytest_collector_module._evaluate_static_skip_condition(
+            invalid_boolop_node,
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is None
+    )
+    assert pytest_collector_module._evaluate_static_skip_condition(
+        ast.parse('False or True').body[0].value,  # type: ignore[attr-defined]
+        literal_bindings={},
+        expression_bindings={},
+    )
+
+    assert (
+        pytest_collector_module._evaluate_static_skip_compare(
+            ast.parse('runtime_flag == 1').body[0].value,  # type: ignore[attr-defined]
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is None
+    )
+    assert (
+        pytest_collector_module._evaluate_static_skip_compare(
+            ast.parse('1 == runtime_flag').body[0].value,  # type: ignore[attr-defined]
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is None
+    )
+    assert (
+        pytest_collector_module._evaluate_static_skip_compare(
+            ast.parse('1 is 1').body[0].value,  # type: ignore[attr-defined]
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is None
+    )
+    assert (
+        pytest_collector_module._evaluate_static_skip_compare(
+            ast.parse('True == runtime_flag').body[0].value,  # type: ignore[attr-defined]
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is None
+    )
+    invalid_comparator_node = ast.Compare(
+        left=ast.Constant(value=True),
+        ops=[ast.Add()],  # type: ignore[list-item]
+        comparators=[ast.Constant(value=True)],
+    )
+    assert (
+        pytest_collector_module._evaluate_static_skip_compare(
+            invalid_comparator_node,
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is None
+    )
+    assert (
+        pytest_collector_module._evaluate_static_skip_compare(
+            ast.parse("True < 'a'").body[0].value,  # type: ignore[attr-defined]
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is None
+    )
+    assert (
+        pytest_collector_module._evaluate_static_skip_compare(
+            ast.parse('True == False == True').body[0].value,  # type: ignore[attr-defined]
+            literal_bindings={},
+            expression_bindings={},
+        )
+        is False
+    )
+    assert (
+        pytest_collector_module._skip_membership_compare('value', 'scalar')
+        is None
+    )
+    assert (
+        pytest_collector_module._extract_exception_symbol_paths(
+            ast.parse('runtime_error()').body[0].value,  # type: ignore[attr-defined]
+        )
+        is None
+    )
+
+
+def test_static_decision_and_issue_helper_branches() -> None:
+    skipif_decorator = _first_decorator(
+        '\n'.join(
+            (
+                '@pytest.mark.skipif(True)',
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    skip_decision = pytest_collector_module._build_static_skip_decision(
+        (skipif_decorator,),
+        ('pytest',),
+        literal_bindings={},
+        expression_bindings={},
+    )
+    assert skip_decision.skip_reason is not None
+
+    xfail_decorator = _first_decorator(
+        '\n'.join(
+            (
+                '@pytest.mark.xfail(True)',
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    xfail_decision = pytest_collector_module._build_static_xfail_decision(
+        (xfail_decorator,),
+        ('pytest',),
+        literal_bindings={},
+        expression_bindings={},
+    )
+    assert xfail_decision.xfail_reason is not None
+
+    keyword_usefixtures = _first_decorator(
+        '\n'.join(
+            (
+                "@pytest.mark.usefixtures(name='db')",
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    usefixtures_decision = pytest_collector_module._build_usefixtures_decision(
+        (keyword_usefixtures,),
+        ('pytest',),
+    )
+    assert usefixtures_decision.issue_code == 'pytest_runtime_usefixtures'
+
+    local_skip = pytest_collector_module._merge_skip_decisions(
+        inherited_skip_reason=None,
+        inherited_skip_issue=None,
+        local_decision=pytest_collector_module.PytestStaticSkipDecision(
+            skip_reason='local skip',
+        ),
+    )
+    assert local_skip.skip_reason == 'local skip'
+
+    non_call_skip = _first_decorator(
+        '\n'.join(
+            (
+                '@pytest.mark.skip',
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    assert (
+        pytest_collector_module._parse_skip_decorator(
+            non_call_skip,
+            literal_bindings={},
+        ).skip_reason
+        == 'Skipped by pytest mark'
+    )
+
+    assert isinstance(xfail_decorator, ast.Call)
+    issue = pytest_collector_module._build_xfail_issue(
+        xfail_decorator,
+        'unsupported',
+    )
+    assert issue.issue_code == 'pytest_unsupported_xfail_condition'
+
+    non_call_usefixtures = _first_decorator(
+        '\n'.join(
+            (
+                '@pytest.mark.usefixtures',
+                'def test_case():',
+                '    pass',
+            ),
+        ),
+    )
+    non_call_usefixtures_decision = pytest_collector_module._parse_usefixtures_decorator(
+        non_call_usefixtures,
+    )
+    assert non_call_usefixtures_decision.requires_pytest_runtime is True
