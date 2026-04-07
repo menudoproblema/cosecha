@@ -3,16 +3,12 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cosecha-lsp"
+name = "cosecha-workspace-python"
 dynamic = ["version"]
-description = "Cosecha Language Server"
+description = "Default Python workspace layout adapters for Cosecha"
 requires-python = ">=3.13"
 dependencies = [
-    "cosecha-core",
-    "cosecha-engine-gherkin",
     "cosecha-workspace",
-    "lsprotocol==2023.0.1",
-    "pygls==1.3.1",
 ]
 
 [dependency-groups]
@@ -21,13 +17,12 @@ dev = [
     "ruff",
 ]
 
-[project.scripts]
-cosecha-lsp = "cosecha_lsp.lsp_server:main"
-granjero = "cosecha_lsp.lsp_server:main"
+[project.entry-points."cosecha.workspace.layouts"]
+python_conventional = "cosecha_workspace_python:PythonConventionalLayoutAdapter"
 
 [tool.setuptools.dynamic]
-version = {attr = "cosecha_lsp._version.__version__"}
+version = {attr = "cosecha_workspace_python.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-namespaces = false
+namespaces = true

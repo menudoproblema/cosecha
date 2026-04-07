@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
 from cosecha.core import manifest_materialization as _manifest_materialization
@@ -43,10 +42,12 @@ from cosecha.core.manifest_validation import (
 from cosecha.core.runtime_profiles import (
     RuntimeProfileSpec,
 )
+from cosecha.workspace import discover_cosecha_manifest
 
 
 if TYPE_CHECKING:  # pragma: no cover
     from argparse import ArgumentParser, Namespace
+    from pathlib import Path
 
     from cosecha.core.config import Config
     from cosecha.core.engines.base import Engine
@@ -183,22 +184,6 @@ class PythonEngineDescriptor:
 
 register_hook_descriptor(PythonHookDescriptor)
 register_engine_descriptor(PythonEngineDescriptor)
-
-
-def discover_cosecha_manifest(
-    *,
-    manifest_file: Path | None = None,
-) -> Path | None:
-    if manifest_file is not None:
-        return manifest_file.resolve() if manifest_file.exists() else None
-
-    for candidate in (Path('tests/cosecha.toml'), Path('cosecha.toml')):
-        if candidate.exists():
-            return candidate.resolve()
-
-    return None
-
-
 def load_cosecha_manifest(
     manifest_file: Path | None = None,
 ) -> CosechaManifest | None:
@@ -375,6 +360,14 @@ def explain_cosecha_manifest(
         manifest_path=manifest.path,
         schema_version=manifest.schema_version,
         root_path=str(config.root_path),
+        workspace=(
+            None if config.workspace is None else config.workspace.to_dict()
+        ),
+        execution_context=(
+            None
+            if config.execution_context is None
+            else config.execution_context.to_dict()
+        ),
         selected_engine_names=tuple(sorted(selected_engine_names or ())),
         requested_paths=requested_paths,
         normalized_paths=requested_paths,

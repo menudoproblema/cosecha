@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from cosecha.core.cosecha_manifest import load_cosecha_manifest
 from cosecha.core.runtime_profiles import build_runtime_canonical_binding_name
+from cosecha.workspace import discover_cosecha_manifest
 
 
 try:  # pragma: no cover
@@ -166,25 +167,12 @@ def _load_pytest_resource_bindings(config):
 def _discover_manifest_path(config) -> Path | None:
     root_path = Path(str(config.rootpath)).resolve()
     cwd_path = Path.cwd().resolve()
-    search_roots = [root_path]
+    manifest_path = discover_cosecha_manifest(start_path=root_path)
+    if manifest_path is not None:
+        return manifest_path
     if cwd_path != root_path:
-        search_roots.append(cwd_path)
-    for search_root in search_roots:
-        for candidate in _iter_manifest_candidates(search_root):
-            if candidate.exists():
-                return candidate
-
+        return discover_cosecha_manifest(start_path=cwd_path)
     return None
-
-
-def _iter_manifest_candidates(start_path: Path):
-    current_path = start_path
-    while True:
-        yield current_path / 'tests' / 'cosecha.toml'
-        yield current_path / 'cosecha.toml'
-        if current_path.parent == current_path:
-            return
-        current_path = current_path.parent
 
 
 def _merge_pytest_resource_bindings(

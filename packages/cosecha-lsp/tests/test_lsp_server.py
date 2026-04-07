@@ -4,6 +4,8 @@ import asyncio
 
 from types import SimpleNamespace
 
+import pytest
+
 from cosecha.core.capabilities import (
     DraftValidationIssue,
     DraftValidationResult,
@@ -36,6 +38,7 @@ from cosecha_lsp.lsp_server import (
     CosechaLanguageServer,
     build_completion_items_from_suggestions,
     build_resolved_definitions_from_knowledge,
+    resolve_workspace_root_path,
 )
 
 
@@ -67,6 +70,28 @@ class _DraftValidatingRunnerStub:
                 ),
             ),
         )
+
+
+def test_resolve_workspace_root_path_prefers_tests_layout(tmp_path) -> None:
+    tests_root = tmp_path / 'tests'
+    tests_root.mkdir()
+    (tests_root / 'cosecha.toml').write_text('', encoding='utf-8')
+
+    assert resolve_workspace_root_path(tmp_path) == tests_root.resolve()
+
+
+def test_resolve_workspace_root_path_supports_root_layout(tmp_path) -> None:
+    (tmp_path / 'cosecha.toml').write_text('', encoding='utf-8')
+
+    assert resolve_workspace_root_path(tmp_path) == tmp_path.resolve()
+
+
+def test_resolve_workspace_root_path_raises_without_workspace(tmp_path) -> None:
+    orphan_path = tmp_path / 'feature.feature'
+    orphan_path.write_text('Feature: Demo\n', encoding='utf-8')
+
+    with pytest.raises(FileNotFoundError):
+        resolve_workspace_root_path(orphan_path)
 
 
 class _DefinitionResolvingRunnerStub:

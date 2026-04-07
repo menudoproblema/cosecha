@@ -203,6 +203,8 @@ class RuntimeProfileSpec:
     id: str
     worker_isolation: WorkerIsolationMode = 'strict'
     services: tuple[RuntimeServiceSpec, ...] = ()
+    execution_root: str | None = None
+    knowledge_storage_root: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return to_builtins_dict(self)

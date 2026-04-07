@@ -9,6 +9,7 @@ description = "Cosecha Pytest Engine"
 requires-python = ">=3.13"
 dependencies = [
     "cosecha-core",
+    "cosecha-workspace",
     "pytest==9.0.2",
 ]
 

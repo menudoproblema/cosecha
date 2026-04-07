@@ -3,16 +3,11 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cosecha-core"
+name = "cosecha-workspace"
 dynamic = ["version"]
-description = "Cosecha Agnostics Core"
+description = "Workspace model and resolution policy for Cosecha"
 requires-python = ">=3.13"
-dependencies = [
-    "cosecha-workspace",
-    "cosecha-workspace-python",
-    "cxp==2.0.0",
-    "msgspec==0.20.0",
-]
+dependencies = []
 
 [dependency-groups]
 dev = [
@@ -21,7 +16,7 @@ dev = [
 ]
 
 [tool.setuptools.dynamic]
-version = {attr = "cosecha.core._version.__version__"}
+version = {attr = "cosecha.workspace._version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -10,6 +10,7 @@ from cosecha.core.runtime_profiles import (
     RuntimeReadinessPolicy,
 )
 from cosecha.core.serialization import from_builtins_dict, to_builtins_dict
+from cosecha.workspace import WorkspaceDeclaration
 
 
 @dataclass(slots=True, frozen=True)
@@ -170,6 +171,9 @@ class CosechaManifest:
     runtime_profiles: tuple[RuntimeProfileSpec, ...] = ()
     resources: tuple[ResourceSpec, ...] = ()
     resource_bindings: tuple[ResourceBindingSpec, ...] = ()
+    workspace: WorkspaceDeclaration = field(
+        default_factory=WorkspaceDeclaration,
+    )
 
     def to_dict(self) -> dict[str, object]:
         return to_builtins_dict(self)
@@ -261,6 +265,8 @@ class ManifestMaterializationExplanation:
     manifest_path: str
     schema_version: int
     root_path: str
+    workspace: dict[str, object] | None = None
+    execution_context: dict[str, object] | None = None
     selected_engine_names: tuple[str, ...] = ()
     requested_paths: tuple[str, ...] = ()
     normalized_paths: tuple[str, ...] = ()

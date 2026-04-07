@@ -20,6 +20,7 @@ from cosecha.core.runtime_profiles import (
     RuntimeReadinessPolicy,
     RuntimeServiceSpec,
 )
+from cosecha.workspace import CodeLocation, WorkspaceDeclaration
 
 
 def parse_cosecha_manifest_text(  # noqa: PLR0913
@@ -71,6 +72,7 @@ def parse_cosecha_manifest_text(  # noqa: PLR0913
         runtime_profiles=runtime_profiles,
         resources=resources,
         resource_bindings=resource_bindings,
+        workspace=_parse_workspace_declaration(payload.get('workspace')),
     )
     validate_manifest(
         manifest,
@@ -128,6 +130,32 @@ def _parse_runtime_profile_spec(
         services=tuple(
             _parse_runtime_service_spec(service_payload)
             for service_payload in services_payload
+        ),
+        execution_root=_require_optional_str(payload.get('execution_root')),
+        knowledge_storage_root=_require_optional_str(
+            payload.get('knowledge_storage_root'),
+        ),
+    )
+
+
+def _parse_workspace_declaration(value: object) -> WorkspaceDeclaration:
+    if value is None:
+        return WorkspaceDeclaration()
+
+    payload = _require_dict(value)
+    location_payloads = _require_tuple_of_dict(payload.get('locations'))
+    return WorkspaceDeclaration(
+        root=_require_optional_str(payload.get('root')),
+        knowledge_anchor=_require_optional_str(
+            payload.get('knowledge_anchor'),
+        ),
+        locations=tuple(
+            CodeLocation(
+                path=_require_engine_path(location_payload, 'path'),
+                role=str(location_payload.get('role', 'source')),  # type: ignore[arg-type]
+                importable=bool(location_payload.get('importable', True)),
+            )
+            for location_payload in location_payloads
         ),
     )
 

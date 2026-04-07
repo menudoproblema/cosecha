@@ -20,6 +20,10 @@ from cosecha.core.module_loading import (
     import_module_from_path as _load_from_path,
 )
 from cosecha.core.plugins.base import PLUGIN_API_VERSION, Plugin
+from cosecha.workspace import (
+    WorkspaceResolutionError,
+    resolve_workspace,
+)
 
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -40,6 +44,21 @@ def import_module_from_path(module_path: str | Path) -> ModuleType:
 
 
 def _discover_import_search_paths(module_path: Path) -> tuple[Path, ...]:
+    try:
+        workspace = resolve_workspace(start_path=module_path)
+    except (FileNotFoundError, WorkspaceResolutionError):
+        return _discover_import_search_paths_legacy(module_path)
+
+    return tuple(
+        location.path.resolve()
+        for location in workspace.import_environment.locations
+        if location.importable and location.path.exists()
+    )
+
+
+def _discover_import_search_paths_legacy(
+    module_path: Path,
+) -> tuple[Path, ...]:
     search_paths: list[Path] = []
 
     project_root = next(

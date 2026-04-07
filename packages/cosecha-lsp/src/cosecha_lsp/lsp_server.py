@@ -70,6 +70,7 @@ from cosecha.engine.gherkin.formatter import (
     GherkinDocumentFormattingEditProvider,
     PlainTextDocument,
 )
+from cosecha.workspace import build_execution_context, resolve_workspace
 
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -163,7 +164,10 @@ class CosechaLanguageServer(LanguageServer):
     def _open_read_only_knowledge_base(
         self,
     ) -> ReadOnlyPersistentKnowledgeBase | None:
-        db_path = resolve_knowledge_base_path(self.config.root_path)
+        db_path = resolve_knowledge_base_path(
+            self.config.workspace_root_path,
+            knowledge_storage_root=self.config.knowledge_storage_root_path,
+        )
         if not db_path.exists():
             return None
 
@@ -775,11 +779,21 @@ def main() -> None:
 
     registry = create_loaded_discovery_registry()
     with using_discovery_registry(registry):
-        config = Config(Path.cwd() / 'tests', capture_log=False)
+        workspace = resolve_workspace()
+        config = Config(
+            workspace.knowledge_anchor,
+            capture_log=False,
+            workspace=workspace,
+            execution_context=build_execution_context(workspace),
+        )
         hooks, engines = setup_engines(config)
         logger.info(f'Config root path: {config.root_path}')
 
         server.loop.run_until_complete(server.start(config, hooks, engines))
+
+
+def resolve_workspace_root_path(start_path: Path | None = None) -> Path:
+    return resolve_workspace(start_path=start_path).knowledge_anchor
 
 
 if __name__ == '__main__':

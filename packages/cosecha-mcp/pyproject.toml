@@ -9,6 +9,7 @@ description = "MCP server for exploring and operating Cosecha workspaces"
 requires-python = ">=3.13"
 dependencies = [
     "cosecha-core",
+    "cosecha-workspace",
     "mcp==1.27.0",
 ]
 
