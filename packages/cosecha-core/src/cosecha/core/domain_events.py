@@ -71,6 +71,7 @@ class DomainEventMetadata:
 class SessionStartedEvent:
     root_path: str
     concurrency: int
+    workspace_fingerprint: str | None = None
     metadata: DomainEventMetadata = field(
         default_factory=DomainEventMetadata,
     )
@@ -485,6 +486,7 @@ def _(event: SessionStartedEvent) -> dict[str, object]:
     return {
         'concurrency': event.concurrency,
         'root_path': event.root_path,
+        'workspace_fingerprint': event.workspace_fingerprint,
     }
 
 
@@ -755,6 +757,11 @@ def _deserialize_session_started_event(
 ) -> DomainEvent:
     return SessionStartedEvent(
         root_path=str(data['root_path']),
+        workspace_fingerprint=(
+            None
+            if data.get('workspace_fingerprint') is None
+            else str(data.get('workspace_fingerprint'))
+        ),
         concurrency=int(data['concurrency']),
         metadata=metadata,
         timestamp=timestamp,

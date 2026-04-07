@@ -218,6 +218,8 @@ class ExecutionRequest:
     root_path: str
     config_snapshot: ConfigSnapshot
     node: TestExecutionNodeSnapshot
+    workspace: dict[str, object] | None = None
+    execution_context: dict[str, object] | None = None
     schema_version: int = EXECUTION_IR_SCHEMA_VERSION
 
     @classmethod
@@ -230,6 +232,16 @@ class ExecutionRequest:
         return cls(
             cwd=str(cwd),
             root_path=str(root_path),
+            workspace=(
+                None
+                if node.engine.config.workspace is None
+                else node.engine.config.workspace.to_dict()
+            ),
+            execution_context=(
+                None
+                if node.engine.config.execution_context is None
+                else node.engine.config.execution_context.to_dict()
+            ),
             config_snapshot=node.engine.config.snapshot(),
             node=node.snapshot,
         )
@@ -250,6 +262,8 @@ class ExecutionBootstrap:
     __test__ = False
     config_snapshot: ConfigSnapshot
     nodes: tuple[TestExecutionNodeSnapshot, ...]
+    workspace: dict[str, object] | None = None
+    execution_context: dict[str, object] | None = None
     resource_materialization_snapshots: tuple[
         ResourceMaterializationSnapshot,
         ...,
@@ -279,6 +293,16 @@ class ExecutionBootstrap:
 
         return cls(
             config_snapshot=node_tuple[0].engine.config.snapshot(),
+            workspace=(
+                None
+                if node_tuple[0].engine.config.workspace is None
+                else node_tuple[0].engine.config.workspace.to_dict()
+            ),
+            execution_context=(
+                None
+                if node_tuple[0].engine.config.execution_context is None
+                else node_tuple[0].engine.config.execution_context.to_dict()
+            ),
             nodes=tuple(node.snapshot for node in node_tuple),
             resource_materialization_snapshots=(
                 resource_materialization_snapshots

@@ -16,6 +16,9 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 SESSION_ARTIFACT_RETENTION_SCOPE_ROOT_PATH = 'root_path'
+SESSION_ARTIFACT_RETENTION_SCOPE_WORKSPACE_FINGERPRINT = (
+    'workspace_fingerprint'
+)
 DEFAULT_SESSION_ARTIFACT_RETAINED_SECTIONS = (
     'config_snapshot',
     'capability_snapshots',
@@ -38,7 +41,9 @@ class SessionArtifactPersistencePolicy:
     retained_sections: tuple[str, ...] = (
         DEFAULT_SESSION_ARTIFACT_RETAINED_SECTIONS
     )
-    retention_scope: str = SESSION_ARTIFACT_RETENTION_SCOPE_ROOT_PATH
+    retention_scope: str = (
+        SESSION_ARTIFACT_RETENTION_SCOPE_WORKSPACE_FINGERPRINT
+    )
     max_artifacts_per_scope: int = DEFAULT_SESSION_ARTIFACT_RETENTION_LIMIT
     max_timing_tests: int = DEFAULT_SESSION_ARTIFACT_MAX_TIMING_TESTS
     max_failure_examples: int = DEFAULT_SESSION_ARTIFACT_MAX_FAILURE_EXAMPLES
@@ -49,7 +54,10 @@ class SessionArtifactPersistencePolicy:
     )
 
     def __post_init__(self) -> None:
-        if self.retention_scope != SESSION_ARTIFACT_RETENTION_SCOPE_ROOT_PATH:
+        if self.retention_scope not in {
+            SESSION_ARTIFACT_RETENTION_SCOPE_ROOT_PATH,
+            SESSION_ARTIFACT_RETENTION_SCOPE_WORKSPACE_FINGERPRINT,
+        }:
             msg = (
                 'Unsupported session artifact retention scope: '
                 f'{self.retention_scope!r}'
@@ -314,6 +322,7 @@ class SessionArtifact:
     config_snapshot: ConfigSnapshot
     capability_snapshots: tuple[CapabilityComponentSnapshot, ...]
     recorded_at: float
+    workspace_fingerprint: str | None = None
     trace_id: str | None = None
     plan_id: str | None = None
     plan_explanation: PlanExplanation | None = None

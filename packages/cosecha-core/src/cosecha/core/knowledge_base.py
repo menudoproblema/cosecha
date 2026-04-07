@@ -64,7 +64,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 KNOWLEDGE_BASE_PATH = Path('.cosecha/kb.db')
 LEGACY_KNOWLEDGE_BASE_PATH = Path('.cosecha/knowledge_base.sqlite3')
-KNOWLEDGE_BASE_SCHEMA_VERSION = 14
+KNOWLEDGE_BASE_SCHEMA_VERSION = 15
 MAX_IDEMPOTENCY_KEYS = 4096
 MAX_IDEMPOTENCY_KEY_AGE_SECONDS = 1800.0
 KNOWLEDGE_BASE_PERSIST_BATCH_SIZE = 128
@@ -92,10 +92,21 @@ def iter_knowledge_base_file_paths(db_path: Path) -> tuple[Path, ...]:
 def resolve_knowledge_base_path(
     root_path: Path,
     *,
+    knowledge_storage_root: Path | None = None,
     migrate_legacy: bool = True,
 ) -> Path:
-    db_path = root_path / KNOWLEDGE_BASE_PATH
-    legacy_db_path = root_path / LEGACY_KNOWLEDGE_BASE_PATH
+    if knowledge_storage_root is None:
+        db_path = root_path / KNOWLEDGE_BASE_PATH
+        legacy_db_path = root_path / LEGACY_KNOWLEDGE_BASE_PATH
+    else:
+        db_path = knowledge_storage_root.resolve() / 'kb.db'
+        legacy_db_path = root_path / LEGACY_KNOWLEDGE_BASE_PATH
+        legacy_current_db_path = root_path / KNOWLEDGE_BASE_PATH
+        if db_path.exists():
+            return db_path
+        if legacy_current_db_path.exists():
+            legacy_db_path = legacy_current_db_path
+
     if db_path.exists():
         return db_path
 
@@ -118,6 +129,14 @@ def resolve_knowledge_base_path(
     return db_path if db_path.exists() else legacy_db_path
 
 
+def _workspace_scope_key(
+    *,
+    root_path: str,
+    workspace_fingerprint: str | None,
+) -> str:
+    return workspace_fingerprint or root_path
+
+
 @dataclass(slots=True, frozen=True)
 class IdempotencyWindowPolicy:
     max_entries: int = MAX_IDEMPOTENCY_KEYS
@@ -127,6 +146,7 @@ class IdempotencyWindowPolicy:
 @dataclass(slots=True, frozen=True)
 class SessionKnowledge:
     root_path: str
+    workspace_fingerprint: str | None
     concurrency: int
     session_id: str | None
     trace_id: str | None
@@ -1247,7 +1267,10 @@ class InMemoryKnowledgeBase:
             persisted_artifact
         )
         self._prune_session_artifacts(
-            persisted_artifact.root_path,
+            _workspace_scope_key(
+                root_path=persisted_artifact.root_path,
+                workspace_fingerprint=persisted_artifact.workspace_fingerprint,
+            ),
             persisted_artifact.persistence_policy.max_artifacts_per_scope,
             persisted_artifact.persistence_policy.max_artifact_age_seconds,
             persisted_artifact.recorded_at,
@@ -1267,7 +1290,7 @@ class InMemoryKnowledgeBase:
 
     def _prune_session_artifacts(
         self,
-        root_path: str,
+        retention_scope_value: str,
         max_artifacts: int,
         max_age_seconds: float | None,
         recorded_at: float,
@@ -1276,7 +1299,11 @@ class InMemoryKnowledgeBase:
             (
                 artifact.recorded_at
                 for artifact in self._session_artifacts.values()
-                if artifact.root_path == root_path
+                if _workspace_scope_key(
+                    root_path=artifact.root_path,
+                    workspace_fingerprint=artifact.workspace_fingerprint,
+                )
+                == retention_scope_value
             ),
             default=recorded_at,
         )
@@ -1284,7 +1311,11 @@ class InMemoryKnowledgeBase:
             (
                 artifact
                 for artifact in self._session_artifacts.values()
-                if artifact.root_path == root_path
+                if _workspace_scope_key(
+                    root_path=artifact.root_path,
+                    workspace_fingerprint=artifact.workspace_fingerprint,
+                )
+                == retention_scope_value
                 and (
                     max_age_seconds is None
                     or artifact.recorded_at
@@ -1300,7 +1331,11 @@ class InMemoryKnowledgeBase:
         expired = tuple(
             artifact.session_id
             for artifact in self._session_artifacts.values()
-            if artifact.root_path == root_path
+            if _workspace_scope_key(
+                root_path=artifact.root_path,
+                workspace_fingerprint=artifact.workspace_fingerprint,
+            )
+            == retention_scope_value
             and max_age_seconds is not None
             and artifact.recorded_at
             < (reference_recorded_at - max_age_seconds)
@@ -1347,6 +1382,7 @@ class InMemoryKnowledgeBase:
         if isinstance(event, SessionStartedEvent):
             self._session = SessionKnowledge(
                 root_path=event.root_path,
+                workspace_fingerprint=event.workspace_fingerprint,
                 concurrency=event.concurrency,
                 session_id=event.metadata.session_id,
                 trace_id=event.metadata.trace_id,
@@ -1359,6 +1395,7 @@ class InMemoryKnowledgeBase:
 
         self._session = SessionKnowledge(
             root_path=self._session.root_path,
+            workspace_fingerprint=self._session.workspace_fingerprint,
             concurrency=self._session.concurrency,
             session_id=event.metadata.session_id or self._session.session_id,
             trace_id=event.metadata.trace_id or self._session.trace_id,
@@ -2301,7 +2338,12 @@ class PersistentKnowledgeBase:
         with self._connection_lock:
             self._persist_session_artifact(persisted_artifact.session_id)
             self._prune_persisted_session_artifacts(
-                persisted_artifact.root_path,
+                _workspace_scope_key(
+                    root_path=persisted_artifact.root_path,
+                    workspace_fingerprint=(
+                        persisted_artifact.workspace_fingerprint
+                    ),
+                ),
                 persisted_artifact.persistence_policy.max_artifacts_per_scope,
                 persisted_artifact.persistence_policy.max_artifact_age_seconds,
                 persisted_artifact.recorded_at,
@@ -2401,6 +2443,7 @@ class PersistentKnowledgeBase:
             CREATE TABLE IF NOT EXISTS session_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 root_path TEXT NOT NULL,
+                workspace_fingerprint TEXT,
                 concurrency INTEGER NOT NULL,
                 session_id TEXT,
                 trace_id TEXT,
@@ -2520,6 +2563,7 @@ class PersistentKnowledgeBase:
                 session_id TEXT PRIMARY KEY,
                 trace_id TEXT,
                 root_path TEXT NOT NULL,
+                workspace_fingerprint TEXT,
                 plan_id TEXT,
                 config_snapshot_json TEXT NOT NULL,
                 capability_snapshots_json TEXT NOT NULL,
@@ -2636,15 +2680,17 @@ class PersistentKnowledgeBase:
             INSERT INTO session_state (
                 id,
                 root_path,
+                workspace_fingerprint,
                 concurrency,
                 session_id,
                 trace_id,
                 started_at,
                 finished_at,
                 has_failures
-            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 root_path = excluded.root_path,
+                workspace_fingerprint = excluded.workspace_fingerprint,
                 concurrency = excluded.concurrency,
                 session_id = excluded.session_id,
                 trace_id = excluded.trace_id,
@@ -2654,6 +2700,7 @@ class PersistentKnowledgeBase:
             """,
             (
                 session.root_path,
+                session.workspace_fingerprint,
                 session.concurrency,
                 session.session_id,
                 session.trace_id,
@@ -3139,6 +3186,7 @@ class PersistentKnowledgeBase:
                 session_id,
                 trace_id,
                 root_path,
+                workspace_fingerprint,
                 plan_id,
                 config_snapshot_json,
                 capability_snapshots_json,
@@ -3149,10 +3197,11 @@ class PersistentKnowledgeBase:
                 telemetry_summary_json,
                 persistence_policy_json,
                 recorded_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 trace_id = excluded.trace_id,
                 root_path = excluded.root_path,
+                workspace_fingerprint = excluded.workspace_fingerprint,
                 plan_id = excluded.plan_id,
                 config_snapshot_json = excluded.config_snapshot_json,
                 capability_snapshots_json = excluded.capability_snapshots_json,
@@ -3168,6 +3217,7 @@ class PersistentKnowledgeBase:
                 artifact.session_id,
                 artifact.trace_id,
                 artifact.root_path,
+                artifact.workspace_fingerprint,
                 artifact.plan_id,
                 encode_json_text(artifact.config_snapshot.to_dict()),
                 encode_json_text(
@@ -3210,7 +3260,7 @@ class PersistentKnowledgeBase:
 
     def _prune_persisted_session_artifacts(
         self,
-        root_path: str,
+        retention_scope_value: str,
         max_artifacts: int,
         max_age_seconds: float | None,
         recorded_at: float,
@@ -3220,34 +3270,34 @@ class PersistentKnowledgeBase:
                 """
                 SELECT COALESCE(MAX(recorded_at), ?)
                 FROM session_artifacts
-                WHERE root_path = ?
+                WHERE COALESCE(workspace_fingerprint, root_path) = ?
                 """,
-                (recorded_at, root_path),
+                (recorded_at, retention_scope_value),
             ).fetchone()[0]
             self._connection.execute(
                 """
                 DELETE FROM session_artifacts
-                WHERE root_path = ?
+                WHERE COALESCE(workspace_fingerprint, root_path) = ?
                   AND recorded_at < ?
                 """,
                 (
-                    root_path,
+                    retention_scope_value,
                     float(reference_recorded_at) - max_age_seconds,
                 ),
             )
         self._connection.execute(
             """
             DELETE FROM session_artifacts
-            WHERE root_path = ?
+            WHERE COALESCE(workspace_fingerprint, root_path) = ?
               AND session_id NOT IN (
                   SELECT session_id
                   FROM session_artifacts
-                  WHERE root_path = ?
+                  WHERE COALESCE(workspace_fingerprint, root_path) = ?
                   ORDER BY recorded_at DESC, session_id DESC
                   LIMIT ?
               )
             """,
-            (root_path, root_path, max_artifacts),
+            (retention_scope_value, retention_scope_value, max_artifacts),
         )
 
     def _clear_runtime_projection(self) -> None:
@@ -3556,6 +3606,9 @@ def _load_session_knowledge(
 
     return SessionKnowledge(
         root_path=str(row['root_path']),
+        workspace_fingerprint=_cast_optional_str(
+            row['workspace_fingerprint'],
+        ),
         concurrency=int(row['concurrency']),
         session_id=_cast_optional_str(row['session_id']),
         trace_id=_cast_optional_str(row['trace_id']),
@@ -3930,6 +3983,9 @@ def _load_session_artifacts(
                     else decode_json(str(row['report_summary_json']))
                 ),
                 'root_path': str(row['root_path']),
+                'workspace_fingerprint': _cast_optional_str(
+                    row['workspace_fingerprint'],
+                ),
                 'session_id': str(row['session_id']),
                 'telemetry_summary': (
                     None
@@ -4419,6 +4475,38 @@ def _migrate_schema_v13_to_v14(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_schema_v14_to_v15(connection: sqlite3.Connection) -> None:
+    session_state_table = connection.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'session_state'
+        """,
+    ).fetchone()
+    if session_state_table is not None:
+        connection.execute(
+            """
+            ALTER TABLE session_state
+            ADD COLUMN workspace_fingerprint TEXT
+            """,
+        )
+
+    session_artifacts_table = connection.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'session_artifacts'
+        """,
+    ).fetchone()
+    if session_artifacts_table is not None:
+        connection.execute(
+            """
+            ALTER TABLE session_artifacts
+            ADD COLUMN workspace_fingerprint TEXT
+            """,
+        )
+
+
 _SCHEMA_MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     8: _migrate_schema_v8_to_v9,
     9: _migrate_schema_v9_to_v10,
@@ -4426,6 +4514,7 @@ _SCHEMA_MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     11: _migrate_schema_v11_to_v12,
     12: _migrate_schema_v12_to_v13,
     13: _migrate_schema_v13_to_v14,
+    14: _migrate_schema_v14_to_v15,
 }
 
 
