@@ -10,7 +10,19 @@ from pathlib import Path
 
 import pytest
 
-from cosecha.core.knowledge_base import TestKnowledge as CoreTestKnowledge
+from cosecha.core.config import ConfigSnapshot
+from cosecha.core.knowledge_base import (
+    PersistentKnowledgeBase,
+    TestKnowledge as CoreTestKnowledge,
+)
+from cosecha.core.session_artifacts import (
+    InstrumentationSummary,
+    SessionArtifact,
+    SessionArtifactPersistencePolicy,
+    SessionReportSummary,
+    SessionTelemetrySummary,
+    SessionTimingSnapshot,
+)
 from cosecha_mcp.service import CosechaMcpService
 from cosecha_mcp.workspace import CosechaWorkspacePaths
 
@@ -320,3 +332,344 @@ def test_query_tests_reads_persistent_knowledge_without_subprocess(
     assert payload['result_type'] == 'knowledge.tests'
     assert payload['context']['source'] == 'persistent_knowledge_base'
     assert len(payload['tests']) == 1
+
+
+def _build_session_artifact(
+    *,
+    session_id: str,
+    recorded_at: float,
+    coverage_payload: dict[str, object] | None,
+) -> SessionArtifact:
+    instrumentation_summaries: dict[str, InstrumentationSummary] = {}
+    if coverage_payload is not None:
+        instrumentation_summaries['coverage'] = InstrumentationSummary(
+            instrumentation_name='coverage',
+            summary_kind='coverage.py',
+            payload=coverage_payload,
+        )
+    return SessionArtifact(
+        session_id=session_id,
+        trace_id=f'trace-{session_id}',
+        root_path='/workspace/demo',
+        plan_id=None,
+        config_snapshot=ConfigSnapshot(
+            root_path='/workspace/demo',
+            output_mode='summary',
+            output_detail='standard',
+            capture_log=True,
+            stop_on_error=False,
+            concurrency=1,
+            strict_step_ambiguity=False,
+        ),
+        capability_snapshots=(),
+        plan_explanation=None,
+        timing=SessionTimingSnapshot(),
+        has_failures=False,
+        report_summary=SessionReportSummary(
+            total_tests=1,
+            status_counts=(('passed', 1),),
+            failure_kind_counts=(),
+            engine_summaries=(),
+            live_engine_snapshots=(),
+            failed_examples=(),
+            failed_files=(),
+            instrumentation_summaries=instrumentation_summaries,
+        ),
+        telemetry_summary=SessionTelemetrySummary(
+            span_count=0,
+            distinct_span_names=0,
+        ),
+        persistence_policy=SessionArtifactPersistencePolicy(),
+        recorded_at=recorded_at,
+    )
+
+
+def _coverage_workspace() -> CosechaWorkspacePaths:
+    return CosechaWorkspacePaths(
+        project_path=PROJECT_ROOT,
+        root_path=PROJECT_TESTS_ROOT,
+        manifest_path=None,
+        knowledge_base_path=PROJECT_KB_PATH,
+    )
+
+
+def _describe_coverage_service(
+    workspace: CosechaWorkspacePaths,
+    *,
+    artifacts: tuple[SessionArtifact, ...],
+    session_from_snapshot: str | None = None,
+) -> CosechaMcpService:
+    class _FakeSession:
+        def __init__(self, session_id: str) -> None:
+            self.session_id = session_id
+
+    class _FakeSnapshot:
+        def __init__(self, session_id: str | None) -> None:
+            self.session = (
+                _FakeSession(session_id) if session_id is not None else None
+            )
+
+    class _FakeKnowledgeBase:
+        def __init__(self, snapshot_session_id: str | None) -> None:
+            self._snapshot_session_id = snapshot_session_id
+
+        def snapshot(self) -> _FakeSnapshot:
+            return _FakeSnapshot(self._snapshot_session_id)
+
+        def query_session_artifacts(self, query):
+            if query.session_id is None:
+                return tuple(artifacts)
+            return tuple(
+                artifact
+                for artifact in artifacts
+                if artifact.session_id == query.session_id
+            )
+
+    class TestableService(CosechaMcpService):
+        def _resolve_workspace(self, *, start_path: str | None = None):
+            return workspace
+
+        @contextmanager
+        def _open_readonly_knowledge_base(self, current_workspace):
+            assert current_workspace == workspace
+            yield _FakeKnowledgeBase(session_from_snapshot)
+
+    return TestableService()
+
+
+def test_describe_session_coverage_returns_coverage_payload_for_latest_session(
+) -> None:
+    workspace = _coverage_workspace()
+    artifact = _build_session_artifact(
+        session_id='session-1',
+        recorded_at=123.0,
+        coverage_payload={
+            'total_coverage': 87.5,
+            'report_type': 'term',
+            'measurement_scope': 'controller_process',
+            'branch': False,
+            'engine_names': ['pytest'],
+            'source_targets': ['src/demo'],
+            'includes_python_subprocesses': True,
+            'includes_worker_processes': False,
+        },
+    )
+
+    service = _describe_coverage_service(
+        workspace,
+        artifacts=(artifact,),
+        session_from_snapshot='session-1',
+    )
+
+    payload = _run_async(
+        service.describe_session_coverage(
+            session_id='last',
+            start_path=str(workspace.project_path),
+        ),
+    )
+
+    assert payload['has_coverage'] is True
+    assert payload['session_id'] == 'session-1'
+    assert payload['total_coverage'] == 87.5
+    assert payload['recorded_at'] == 123.0
+    assert payload['coverage_summary']['instrumentation_name'] == 'coverage'
+    assert (
+        payload['coverage_summary']['payload']['source_targets']
+        == ['src/demo']
+    )
+
+
+def test_describe_session_coverage_reports_missing_coverage() -> None:
+    workspace = _coverage_workspace()
+    artifact = _build_session_artifact(
+        session_id='session-2',
+        recorded_at=456.0,
+        coverage_payload=None,
+    )
+
+    service = _describe_coverage_service(
+        workspace,
+        artifacts=(artifact,),
+        session_from_snapshot='session-2',
+    )
+
+    payload = _run_async(
+        service.describe_session_coverage(
+            session_id='last',
+            start_path=str(workspace.project_path),
+        ),
+    )
+
+    assert payload['has_coverage'] is False
+    assert payload['session_id'] == 'session-2'
+    assert payload['total_coverage'] is None
+    assert payload['reason'] == 'session has no coverage instrumentation'
+
+
+def test_describe_session_coverage_handles_empty_knowledge_base() -> None:
+    workspace = _coverage_workspace()
+
+    service = _describe_coverage_service(
+        workspace,
+        artifacts=(),
+        session_from_snapshot=None,
+    )
+
+    payload = _run_async(
+        service.describe_session_coverage(
+            session_id='last',
+            start_path=str(workspace.project_path),
+        ),
+    )
+
+    assert payload['has_coverage'] is False
+    assert payload['session_id'] is None
+    assert payload['reason'] == 'no session recorded yet'
+
+
+def test_list_coverage_history_filters_sessions_without_coverage() -> None:
+    workspace = _coverage_workspace()
+    artifact_with_coverage = _build_session_artifact(
+        session_id='session-1',
+        recorded_at=100.0,
+        coverage_payload={
+            'total_coverage': 72.0,
+            'report_type': 'term',
+            'measurement_scope': 'controller_process',
+            'branch': True,
+            'engine_names': ['pytest'],
+            'source_targets': ['src/demo'],
+            'includes_python_subprocesses': True,
+            'includes_worker_processes': False,
+        },
+    )
+    artifact_without_coverage = _build_session_artifact(
+        session_id='session-2',
+        recorded_at=200.0,
+        coverage_payload=None,
+    )
+    artifact_with_newer_coverage = _build_session_artifact(
+        session_id='session-3',
+        recorded_at=300.0,
+        coverage_payload={
+            'total_coverage': 88.4,
+            'report_type': 'term-missing',
+            'measurement_scope': 'controller_process',
+            'branch': False,
+            'engine_names': ['pytest'],
+            'source_targets': ['src/demo', 'src/extra'],
+            'includes_python_subprocesses': True,
+            'includes_worker_processes': False,
+        },
+    )
+
+    service = _describe_coverage_service(
+        workspace,
+        artifacts=(
+            artifact_with_newer_coverage,
+            artifact_without_coverage,
+            artifact_with_coverage,
+        ),
+    )
+
+    payload = _run_async(
+        service.list_coverage_history(
+            limit=5,
+            start_path=str(workspace.project_path),
+        ),
+    )
+
+    assert payload['entries_returned_count'] == 2
+    session_ids = [entry['session_id'] for entry in payload['entries']]
+    assert session_ids == ['session-3', 'session-1']
+    assert payload['entries'][0]['total_coverage'] == 88.4
+    assert payload['entries'][0]['branch'] is False
+    assert payload['entries'][1]['total_coverage'] == 72.0
+    assert payload['entries'][1]['branch'] is True
+
+
+def test_describe_session_coverage_rejects_none_session_id() -> None:
+    workspace = _coverage_workspace()
+
+    service = _describe_coverage_service(
+        workspace,
+        artifacts=(),
+        session_from_snapshot=None,
+    )
+
+    payload = _run_async(
+        service.describe_session_coverage(
+            session_id=None,
+            start_path=str(workspace.project_path),
+        ),
+    )
+
+    assert payload['has_coverage'] is False
+    assert payload['session_id'] is None
+    assert payload['coverage_summary'] is None
+    assert payload['total_coverage'] is None
+    assert 'list_coverage_history' in payload['reason']
+
+
+def test_list_coverage_history_returns_entries_sorted_by_recorded_at_desc(
+    tmp_path: Path,
+) -> None:
+    project_path = tmp_path / 'project'
+    tests_root = project_path / 'tests'
+    kb_path = tests_root / '.cosecha' / 'kb.db'
+    kb_path.parent.mkdir(parents=True)
+
+    knowledge_base = PersistentKnowledgeBase(kb_path)
+    try:
+        def _store(session_id: str, recorded_at: float, total: float) -> None:
+            knowledge_base.store_session_artifact(
+                _build_session_artifact(
+                    session_id=session_id,
+                    recorded_at=recorded_at,
+                    coverage_payload={
+                        'total_coverage': total,
+                        'report_type': 'term',
+                        'measurement_scope': 'controller_process',
+                        'branch': False,
+                        'engine_names': ['pytest'],
+                        'source_targets': ['src/demo'],
+                        'includes_python_subprocesses': True,
+                        'includes_worker_processes': False,
+                    },
+                ),
+            )
+
+        # Insertion order deliberately NOT matching recorded_at order.
+        _store('session-middle', recorded_at=200.0, total=80.0)
+        _store('session-newest', recorded_at=300.0, total=90.0)
+        _store('session-oldest', recorded_at=100.0, total=70.0)
+    finally:
+        knowledge_base.close()
+
+    workspace = CosechaWorkspacePaths(
+        project_path=project_path,
+        root_path=tests_root,
+        manifest_path=None,
+        knowledge_base_path=kb_path,
+    )
+
+    class TestableService(CosechaMcpService):
+        def _resolve_workspace(self, *, start_path: str | None = None):
+            return workspace
+
+    service = TestableService()
+    payload = _run_async(
+        service.list_coverage_history(
+            limit=10,
+            start_path=str(project_path),
+        ),
+    )
+
+    session_ids = [entry['session_id'] for entry in payload['entries']]
+    totals = [entry['total_coverage'] for entry in payload['entries']]
+    assert session_ids == [
+        'session-newest',
+        'session-middle',
+        'session-oldest',
+    ]
+    assert totals == [90.0, 80.0, 70.0]

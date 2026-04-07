@@ -102,5 +102,5 @@ Resolver coverage dentro de Cosecha con el menor número de conceptos nuevos. La
 ## Suposiciones y defaults
 - Esta v1 sigue optimizada para un solo instrumenter real: coverage.
 - No hay composición entre instrumenters, conflictos generales, IPC, `sitecustomize` ni package externo de supervisor.
-- El package `cosecha-plugin-coverage` no se renombra aún.
+- El package se ha renombrado a `cosecha-instrumentation-coverage` y el módulo Python a `cosecha.instrumentation.coverage`.
 - Si aparece un segundo instrumenter real, entonces se revisa con datos si conviene introducir discovery específico o extraer infraestructura común.

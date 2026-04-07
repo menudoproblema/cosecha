@@ -63,4 +63,4 @@ No es dueño de:
 - [Reporter consola](../../cosecha-reporter-console/docs/index.md)
 - [Reporter JSON](../../cosecha-reporter-json/docs/index.md)
 - [Reporter JUnit](../../cosecha-reporter-junit/docs/index.md)
-- [Plugin coverage](../../cosecha-plugin-coverage/docs/index.md)
+- [Coverage instrumentation](../../cosecha-instrumentation-coverage/docs/index.md)

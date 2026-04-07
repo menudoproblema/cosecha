@@ -1,13 +1,16 @@
-# Plugin de coverage
+# Instrumentación de coverage
 
 ## Objetivo
 
-`cosecha-plugin-coverage` mide cobertura de código como plugin
-transversal del runner, no como feature de un engine concreto.
+`cosecha-instrumentation-coverage` mide cobertura de código como
+instrumentación interna de Cosecha. La shell detecta `cosecha run --cov`
+y relanza el comando bajo Coverage.py; el `CoverageInstrumenter` prepara
+el entorno del subprocess y, al terminar, construye el summary que se
+persiste en el artifact de sesión y se renderiza por la shell.
 
 ## Punto de entrada
 
-- `src/cosecha/plugin/coverage/__init__.py`
+- `src/cosecha/instrumentation/coverage/__init__.py`
 
 ## Superficie pública
 

@@ -51,7 +51,7 @@ def test_cosecha_optional_dependencies_stay_outside_default_bundle() -> None:
     ]
     assert optional_dependencies["mongo"] == ["cosecha-provider-mongodb"]
     assert optional_dependencies["ssl"] == ["cosecha-provider-ssl"]
-    assert optional_dependencies["coverage"] == ["cosecha-plugin-coverage"]
+    assert optional_dependencies["coverage"] == ["cosecha-instrumentation-coverage"]
     assert optional_dependencies["timing"] == ["cosecha-plugin-timing"]
     assert optional_dependencies["lsp"] == ["cosecha-lsp"]
     assert optional_dependencies["mcp"] == ["cosecha-mcp"]
@@ -66,7 +66,7 @@ def test_cosecha_optional_dependencies_stay_outside_default_bundle() -> None:
         "cosecha-provider-http[uvicorn]",
         "cosecha-provider-mongodb",
         "cosecha-provider-ssl",
-        "cosecha-plugin-coverage",
+        "cosecha-instrumentation-coverage",
         "cosecha-plugin-timing",
     ]
     assert optional_dependencies["full"] == [
@@ -76,7 +76,7 @@ def test_cosecha_optional_dependencies_stay_outside_default_bundle() -> None:
         "cosecha-provider-http[uvicorn]",
         "cosecha-provider-mongodb",
         "cosecha-provider-ssl",
-        "cosecha-plugin-coverage",
+        "cosecha-instrumentation-coverage",
         "cosecha-plugin-timing",
         "cosecha-lsp",
         "cosecha-mcp",
@@ -134,7 +134,7 @@ def test_cosecha_core_and_console_stack_no_longer_depend_on_rich() -> None:
     package_names = (
         "cosecha-core",
         "cosecha-reporter-console",
-        "cosecha-plugin-coverage",
+        "cosecha-instrumentation-coverage",
     )
 
     for package_name in package_names:
@@ -194,7 +194,7 @@ def test_runtime_dependency_policy_uses_exact_versions() -> None:
         "cosecha-engine-pytest": {"pytest==9.0.2"},
         "cosecha-lsp": {"lsprotocol==2023.0.1", "pygls==1.3.1"},
         "cosecha-mcp": {"mcp==1.27.0"},
-        "cosecha-plugin-coverage": {"coverage==7.13.3"},
+        "cosecha-instrumentation-coverage": {"coverage==7.13.3"},
     }
 
     base_path = Path(__file__).resolve().parents[3] / "packages"

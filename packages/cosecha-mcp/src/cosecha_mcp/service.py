@@ -459,6 +459,126 @@ class CosechaMcpService:
             start_path=start_path,
         )
 
+    async def describe_session_coverage(
+        self,
+        *,
+        session_id: str | None = 'last',
+        start_path: str | None = None,
+    ) -> dict[str, object]:
+        workspace = self._resolve_workspace(start_path=start_path)
+        if session_id is None:
+            return {
+                'workspace': workspace.to_dict(),
+                'session_id': None,
+                'has_coverage': False,
+                'coverage_summary': None,
+                'total_coverage': None,
+                'recorded_at': None,
+                'reason': (
+                    "session_id must be 'last' or an explicit session id; "
+                    'use list_coverage_history to enumerate sessions'
+                ),
+            }
+        resolved_session_id = self._resolve_session_id(
+            workspace,
+            requested_session_id=session_id,
+        )
+        payload: dict[str, object] = {
+            'workspace': workspace.to_dict(),
+            'session_id': resolved_session_id,
+            'has_coverage': False,
+            'coverage_summary': None,
+            'total_coverage': None,
+            'recorded_at': None,
+        }
+        if resolved_session_id is None:
+            payload['reason'] = 'no session recorded yet'
+            return payload
+
+        query = SessionArtifactQuery(
+            session_id=resolved_session_id,
+            limit=1,
+        )
+        with self._open_readonly_knowledge_base(workspace) as knowledge_base:
+            artifacts = knowledge_base.query_session_artifacts(query)
+        if not artifacts:
+            payload['reason'] = (
+                f'session artifact not found for {resolved_session_id}'
+            )
+            return payload
+
+        artifact = artifacts[0]
+        payload['recorded_at'] = artifact.recorded_at
+        coverage_summary = self._extract_coverage_summary(artifact)
+        if coverage_summary is None:
+            payload['reason'] = 'session has no coverage instrumentation'
+            return payload
+
+        payload['has_coverage'] = True
+        payload['coverage_summary'] = coverage_summary.to_dict()
+        payload['total_coverage'] = coverage_summary.payload.get(
+            'total_coverage',
+        )
+        return payload
+
+    async def list_coverage_history(
+        self,
+        *,
+        limit: int = 20,
+        start_path: str | None = None,
+    ) -> dict[str, object]:
+        workspace = self._resolve_workspace(start_path=start_path)
+        query = SessionArtifactQuery(limit=limit)
+        with self._open_readonly_knowledge_base(workspace) as knowledge_base:
+            artifacts = knowledge_base.query_session_artifacts(query)
+
+        entries: list[dict[str, object]] = []
+        for artifact in artifacts:
+            coverage_summary = self._extract_coverage_summary(artifact)
+            if coverage_summary is None:
+                continue
+            entry: dict[str, object] = {
+                'session_id': artifact.session_id,
+                'recorded_at': artifact.recorded_at,
+                'has_failures': artifact.has_failures,
+                'total_coverage': coverage_summary.payload.get(
+                    'total_coverage',
+                ),
+                'branch': coverage_summary.payload.get('branch'),
+                'source_targets': coverage_summary.payload.get(
+                    'source_targets',
+                ),
+                'measurement_scope': coverage_summary.payload.get(
+                    'measurement_scope',
+                ),
+            }
+            entries.append(entry)
+
+        return {
+            'workspace': workspace.to_dict(),
+            'entries': entries,
+            'entries_returned_count': len(entries),
+        }
+
+    @staticmethod
+    def _extract_coverage_summary(artifact):
+        # Hardcoded for the single v1 instrumenter. Do NOT generalize this
+        # into a `_extract_instrumentation_summary(kind=...)` helper until a
+        # second real instrumenter exists in cosecha.instrumentation: the
+        # right shape of that helper (and of the MCP surface) can only be
+        # decided from a concrete second use case, not from speculation.
+        report_summary = getattr(artifact, 'report_summary', None)
+        if report_summary is None:
+            return None
+        summaries = getattr(
+            report_summary,
+            'instrumentation_summaries',
+            None,
+        )
+        if not summaries:
+            return None
+        return summaries.get('coverage')
+
     async def inspect_test_plan(
         self,
         *,

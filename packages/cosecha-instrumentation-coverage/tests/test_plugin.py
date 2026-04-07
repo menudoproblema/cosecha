@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import coverage
 
-from cosecha.plugin.coverage import (
+from cosecha.instrumentation.coverage import (
     CoverageInstrumenter,
     CoverageRequest,
     parse_coverage_request,
@@ -152,7 +152,7 @@ def test_collect_respects_branch_from_user_config_when_flag_not_passed(
             return 88.0
 
     monkeypatch.setattr(
-        'cosecha.plugin.coverage._coverage_module',
+        'cosecha.instrumentation.coverage._coverage_module',
         lambda: SimpleNamespace(Coverage=_FakeCoverage),
     )
 

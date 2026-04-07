@@ -4,6 +4,8 @@ members = [
     "internal/cosecha-provider-workspace",
     "packages/cosecha",
     "packages/cosecha-core",
+    "packages/cosecha-workspace",
+    "packages/cosecha-workspace-python",
     "packages/cosecha-mcp",
     "packages/cosecha-lsp",
     "packages/cosecha-engine-gherkin",
@@ -11,7 +13,7 @@ members = [
     "packages/cosecha-provider-http",
     "packages/cosecha-provider-mongodb",
     "packages/cosecha-provider-ssl",
-    "packages/cosecha-plugin-coverage",
+    "packages/cosecha-instrumentation-coverage",
     "packages/cosecha-plugin-timing",
     "packages/cosecha-reporter-console",
     "packages/cosecha-reporter-json",
@@ -23,6 +25,8 @@ cosecha-testkit-internal = { workspace = true }
 cosecha-provider-workspace-internal = { workspace = true }
 cosecha = { workspace = true }
 cosecha-core = { workspace = true }
+cosecha-workspace = { workspace = true }
+cosecha-workspace-python = { workspace = true }
 cosecha-mcp = { workspace = true }
 cosecha-lsp = { workspace = true }
 cosecha-engine-gherkin = { workspace = true }
@@ -30,7 +34,7 @@ cosecha-engine-pytest = { workspace = true }
 cosecha-provider-http = { workspace = true }
 cosecha-provider-mongodb = { workspace = true }
 cosecha-provider-ssl = { workspace = true }
-cosecha-plugin-coverage = { workspace = true }
+cosecha-instrumentation-coverage = { workspace = true }
 cosecha-plugin-timing = { workspace = true }
 cosecha-reporter-console = { workspace = true }
 cosecha-reporter-json = { workspace = true }
@@ -70,6 +74,8 @@ src = [
     "packages/cosecha/tests",
     "packages/cosecha-core/src",
     "packages/cosecha-core/tests",
+    "packages/cosecha-workspace/src",
+    "packages/cosecha-workspace-python/src",
     "packages/cosecha-mcp/src",
     "packages/cosecha-mcp/tests",
     "packages/cosecha-lsp/src",
@@ -78,7 +84,7 @@ src = [
     "packages/cosecha-provider-http/src",
     "packages/cosecha-provider-mongodb/src",
     "packages/cosecha-provider-ssl/src",
-    "packages/cosecha-plugin-coverage/src",
+    "packages/cosecha-instrumentation-coverage/src",
     "packages/cosecha-plugin-timing/src",
     "packages/cosecha-reporter-console/src",
     "packages/cosecha-reporter-json/src",

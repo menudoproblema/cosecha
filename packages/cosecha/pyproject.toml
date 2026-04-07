@@ -11,6 +11,7 @@ dependencies = [
     "cosecha-core",
     "cosecha-engine-pytest",
     "cosecha-reporter-console",
+    "cosecha-workspace",
 ]
 
 [dependency-groups]
@@ -33,7 +34,7 @@ mongo = [
     "cosecha-provider-mongodb",
 ]
 coverage = [
-    "cosecha-plugin-coverage",
+    "cosecha-instrumentation-coverage",
 ]
 timing = [
     "cosecha-plugin-timing",
@@ -63,7 +64,7 @@ all = [
     "cosecha-provider-http[uvicorn]",
     "cosecha-provider-mongodb",
     "cosecha-provider-ssl",
-    "cosecha-plugin-coverage",
+    "cosecha-instrumentation-coverage",
     "cosecha-plugin-timing",
 ]
 devtools = [
@@ -77,7 +78,7 @@ full = [
     "cosecha-provider-http[uvicorn]",
     "cosecha-provider-mongodb",
     "cosecha-provider-ssl",
-    "cosecha-plugin-coverage",
+    "cosecha-instrumentation-coverage",
     "cosecha-plugin-timing",
     "cosecha-lsp",
     "cosecha-mcp",

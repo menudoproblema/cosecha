@@ -176,6 +176,82 @@ async def list_recent_sessions(
 
 
 @MCP_SERVER.tool()
+async def describe_session_coverage(
+    session_id: str | None = 'last',
+    start_path: str | None = None,
+) -> dict[str, object]:
+    """Return the coverage instrumentation summary for a Cosecha session.
+
+    Use ``session_id='last'`` (default) to describe the most recently
+    persisted session, or pass an explicit session id to target a
+    specific run. Passing ``None`` is rejected with an explicit error.
+
+    The response always includes ``workspace``, ``session_id``,
+    ``recorded_at``, ``has_coverage``, ``coverage_summary`` and
+    ``total_coverage``. ``has_coverage`` is ``False`` when the session
+    was not instrumented with ``--cov``, when the artifact is not yet
+    visible, or when no session has been recorded at all; in those
+    cases ``reason`` explains which case applied.
+
+    When ``has_coverage`` is ``True``, ``coverage_summary`` contains an
+    ``InstrumentationSummary`` with ``instrumentation_name='coverage'``
+    and a ``payload`` with the following fields:
+
+    - ``total_coverage``: float, percentage 0-100.
+    - ``report_type``: ``'term'`` or ``'term-missing'``.
+    - ``measurement_scope``: currently always ``'controller_process'``.
+    - ``branch``: whether branch coverage was enabled.
+    - ``source_targets``: the source roots coverage was measured over.
+    - ``engine_names``: engines that participated in the run.
+    - ``includes_python_subprocesses``: ``True`` when coverage was
+      propagated to Python subprocesses spawned by the runner via
+      ``COVERAGE_PROCESS_START`` and ``patch = subprocess``.
+    - ``includes_worker_processes``: ``True`` only when Cosecha
+      persistent workers are explicitly covered. In v1 this is always
+      ``False`` and multi-worker runs should be interpreted as
+      controller-only coverage.
+
+    ``total_coverage`` at the top level is a convenience duplicate of
+    ``coverage_summary.payload.total_coverage``.
+    """
+    return await SERVICE.describe_session_coverage(
+        session_id=session_id,
+        start_path=start_path,
+    )
+
+
+@MCP_SERVER.tool()
+async def list_coverage_history(
+    limit: int = 20,
+    start_path: str | None = None,
+) -> dict[str, object]:
+    """List recent Cosecha sessions that recorded coverage instrumentation.
+
+    Returns ``entries`` ordered by ``recorded_at`` descending (most
+    recent first), skipping sessions that did not run with ``--cov``.
+    ``limit`` bounds the number of persisted sessions inspected, not
+    the number of entries returned: if the newest N sessions have no
+    coverage, ``entries`` will be empty even with a large limit.
+
+    Each entry contains:
+
+    - ``session_id``, ``recorded_at``, ``has_failures``.
+    - ``total_coverage``: float, percentage 0-100.
+    - ``branch``: whether branch coverage was enabled for that run.
+    - ``source_targets``: the source roots coverage was measured over.
+    - ``measurement_scope``: see ``describe_session_coverage``.
+
+    Consumers can compute trends or regressions by comparing
+    ``entries[0]`` against ``entries[1:]``. Entries with failing tests
+    are included so callers can decide whether to ignore them.
+    """
+    return await SERVICE.list_coverage_history(
+        limit=limit,
+        start_path=start_path,
+    )
+
+
+@MCP_SERVER.tool()
 async def inspect_test_plan(
     test_path: str | None = None,
     paths: list[str] | None = None,
@@ -275,7 +351,46 @@ async def run_tests(
     selected_engines: list[str] | None = None,
     start_path: str | None = None,
 ) -> dict[str, object]:
-    """Execute tests for the selected paths or labels in the active workspace."""
+    """Execute tests for the selected paths or labels in the active workspace.
+
+    **Opt-in required**: this tool is disabled by default and raises
+    ``PermissionError`` unless ``COSECHA_MCP_ENABLE_RUN_TESTS=1`` is
+    set in the environment where cosecha-mcp runs.
+
+    **Selection semantics**:
+
+    - ``paths`` accepts file or directory paths relative to the tests
+      root (or absolute paths inside it). File-level granularity only:
+      Cosecha v1 does NOT support pytest-style test selectors like
+      ``tests/foo.py::test_bar`` or ``tests/foo.py::TestClass::test_m``.
+      Passing a ``::``-qualified path matches zero tests and the
+      underlying ``cosecha run`` exits with code 5
+      (``no tests collected``), so the operation result will reflect
+      an empty selection rather than a spurious success. If you need
+      to run a single test today, run its full file instead.
+    - ``selection_labels`` filters by tags/labels, if the engines use
+      them. Prefix with ``~`` to exclude (e.g. ``~slow``).
+    - ``test_limit`` bounds the number of tests executed AFTER
+      selection. It does NOT select a specific test: ``test_limit=1``
+      runs an arbitrary single test from the selection.
+    - ``selected_engines`` restricts execution to a subset of engines
+      (e.g. ``['pytest']`` or ``['gherkin']``).
+
+    **Rerun-failed pattern** (manual composition, no dedicated tool):
+
+    1. Call ``read_session_artifacts(session_id='last')`` and read
+       ``report_summary.failed_files`` to get failed file paths, or
+       call ``query_tests(status='failed')`` for per-test records.
+    2. Pass those paths to ``run_tests(paths=...)``. Because Cosecha
+       only supports file granularity, this reruns every test in each
+       failed file, not only the individual failing tests.
+    3. After the rerun, call ``read_session_artifacts`` again to check
+       the new ``has_failures`` and the updated failed set.
+
+    **Return shape**: ``has_failures`` (bool), ``knowledge_base``
+    (freshness snapshot), ``selected_engines``, plus the serialized
+    operation result.
+    """
     return await SERVICE.run_tests(
         paths=paths,
         selection_labels=selection_labels,
