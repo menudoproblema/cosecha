@@ -63,6 +63,31 @@ def test_pytest_context_aggregates_finalizer_errors() -> None:
         asyncio.run(context.cleanup())
 
 
+def test_pytest_context_raises_single_finalizer_error_directly() -> None:
+    context = PytestContext()
+
+    async def fail_once() -> None:
+        msg = 'boom-once'
+        raise RuntimeError(msg)
+
+    context.add_finalizer(fail_once)
+    with pytest.raises(RuntimeError, match='boom-once'):
+        asyncio.run(context.cleanup())
+
+
+def test_pytest_context_keeps_explicit_resource_bindings() -> None:
+    bindings = (
+        ResourceBindingSpec(
+            engine_type='pytest',
+            resource_name='workspace',
+            fixture_name='cosecha_workspace',
+        ),
+    )
+    context = PytestContext(resource_bindings=bindings)
+
+    assert context.resource_bindings == bindings
+
+
 def test_pytest_test_item_describes_predicates_and_runtime_requirements(
     tmp_path: Path,
 ) -> None:
