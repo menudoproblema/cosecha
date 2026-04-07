@@ -492,6 +492,7 @@ class QuerySessionArtifactsOperation:
 @dataclass(slots=True, frozen=True)
 class RunOperationResult:
     has_failures: bool
+    total_tests: int = 0
     result_type: OperationResultType = 'run.result'
 
     def to_dict(self) -> dict[str, object]:

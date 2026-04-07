@@ -41,10 +41,8 @@ def test_parse_args_accepts_manifest_show_without_preloading_manifest(
     assert request.manifest_file is None
 
 
-def test_execute_runtime_request_exits_with_code_1_when_run_has_failures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    request = SimpleNamespace(
+def _build_run_request() -> runner_cli.RunCliRequest:
+    return runner_cli.RunCliRequest(
         context=runner_cli.RuntimeCliContext(
             args=SimpleNamespace(),
             config=SimpleNamespace(),
@@ -53,20 +51,72 @@ def test_execute_runtime_request_exits_with_code_1_when_run_has_failures(
             selection=runner_cli.CliSelection(),
         ),
     )
-    request = runner_cli.RunCliRequest(context=request.context)
 
+
+def _install_dummy_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    result: RunOperationResult,
+) -> None:
     class DummyRunner:
         def __init__(self, *_args, **_kwargs) -> None:
             return None
 
         async def execute_operation(self, operation):
             del operation
-            return RunOperationResult(has_failures=True)
+            return result
 
     monkeypatch.setattr(runner_cli, 'Runner', DummyRunner)
 
+
+def test_execute_runtime_request_exits_with_code_1_when_run_has_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_dummy_runner(
+        monkeypatch,
+        result=RunOperationResult(has_failures=True, total_tests=3),
+    )
+
     with pytest.raises(SystemExit, match='1'):
-        runner_cli._execute_runtime_request(request)
+        runner_cli._execute_runtime_request(_build_run_request())
+
+
+def test_execute_runtime_request_exits_with_code_5_when_no_tests_collected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_dummy_runner(
+        monkeypatch,
+        result=RunOperationResult(has_failures=False, total_tests=0),
+    )
+
+    with pytest.raises(SystemExit, match='5'):
+        runner_cli._execute_runtime_request(_build_run_request())
+
+
+def test_execute_runtime_request_exits_cleanly_when_tests_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_dummy_runner(
+        monkeypatch,
+        result=RunOperationResult(has_failures=False, total_tests=7),
+    )
+
+    # No SystemExit: a clean passing run just returns.
+    runner_cli._execute_runtime_request(_build_run_request())
+
+
+def test_execute_runtime_request_prefers_failure_exit_over_empty_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Collection errors surface as has_failures=True + total_tests=0:
+    # exit 1 must win over exit 5 so the failure is not hidden.
+    _install_dummy_runner(
+        monkeypatch,
+        result=RunOperationResult(has_failures=True, total_tests=0),
+    )
+
+    with pytest.raises(SystemExit, match='1'):
+        runner_cli._execute_runtime_request(_build_run_request())
 
 
 def test_main_exits_with_usage_error_for_value_errors(
