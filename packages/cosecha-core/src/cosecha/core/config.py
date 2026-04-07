@@ -10,6 +10,7 @@ from cosecha.core.diagnostics import ConsoleDiagnosticSink
 from cosecha.core.items import TestResultStatus
 from cosecha.core.output import OutputDetail, OutputMode
 from cosecha.core.serialization import from_builtins_dict, to_builtins_dict
+from cosecha.workspace import EffectiveWorkspace, ExecutionContext
 
 
 class StatusColorType(TypedDict):
@@ -30,13 +31,16 @@ class ConfigSnapshot:
     concurrency: int
     strict_step_ambiguity: bool
     persist_live_engine_snapshots: bool = False
+    workspace_fingerprint: str | None = None
+    workspace: dict[str, object] | None = None
+    execution_context: dict[str, object] | None = None
     reports: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     definition_paths: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def fingerprint(self) -> str:
         payload = (
-            self.root_path,
+            self.workspace_fingerprint or self.root_path,
             self.output_mode,
             self.output_detail,
             self.capture_log,
@@ -44,6 +48,7 @@ class ConfigSnapshot:
             self.concurrency,
             self.strict_step_ambiguity,
             self.persist_live_engine_snapshots,
+            self.execution_context,
             self.reports,
             self.definition_paths,
         )
@@ -68,6 +73,7 @@ class Config:
         'console',
         'definition_paths',
         'diagnostics',
+        'execution_context',
         'output_detail',
         'output_mode',
         'persist_live_engine_snapshots',
@@ -76,6 +82,7 @@ class Config:
         'stop_on_error',
         'strict_step_ambiguity',
         'theme',
+        'workspace',
     )
 
     def __init__(  # noqa: PLR0913
@@ -91,8 +98,16 @@ class Config:
         console_cls: type[Console] | None = None,
         reports: dict[str, Path] | None = None,
         definition_paths: tuple[Path, ...] = (),
+        workspace: EffectiveWorkspace | None = None,
+        execution_context: ExecutionContext | None = None,
     ) -> None:
-        self.root_path = root_path.resolve()
+        self.workspace = workspace
+        self.execution_context = execution_context
+        self.root_path = (
+            workspace.knowledge_anchor.resolve()
+            if workspace is not None
+            else root_path.resolve()
+        )
 
         self.output_mode = output_mode
         self.output_detail = output_detail
@@ -149,6 +164,17 @@ class Config:
             concurrency=self.concurrency,
             strict_step_ambiguity=self.strict_step_ambiguity,
             persist_live_engine_snapshots=self.persist_live_engine_snapshots,
+            workspace_fingerprint=(
+                None if self.workspace is None else self.workspace.fingerprint
+            ),
+            workspace=(
+                None if self.workspace is None else self.workspace.to_dict()
+            ),
+            execution_context=(
+                None
+                if self.execution_context is None
+                else self.execution_context.to_dict()
+            ),
             reports=tuple(
                 sorted(
                     (name, str(path)) for name, path in self.reports.items()
@@ -158,6 +184,30 @@ class Config:
                 str(path) for path in self.definition_paths
             ),
         )
+
+    @property
+    def workspace_root_path(self) -> Path:
+        if self.workspace is not None:
+            return self.workspace.workspace_root
+        return self.root_path
+
+    @property
+    def execution_root_path(self) -> Path:
+        if self.execution_context is not None:
+            return self.execution_context.execution_root
+        return self.root_path
+
+    @property
+    def knowledge_storage_root_path(self) -> Path:
+        if self.execution_context is not None:
+            return self.execution_context.knowledge_storage_root
+        return self.root_path / '.cosecha'
+
+    @property
+    def shadow_root_path(self) -> Path | None:
+        if self.execution_context is None:
+            return None
+        return self.execution_context.shadow_root
 
     @classmethod
     def from_snapshot(
@@ -181,6 +231,16 @@ class Config:
             reports={name: Path(path) for name, path in snapshot.reports},
             definition_paths=tuple(
                 Path(path) for path in snapshot.definition_paths
+            ),
+            workspace=(
+                None
+                if snapshot.workspace is None
+                else EffectiveWorkspace.from_dict(snapshot.workspace)
+            ),
+            execution_context=(
+                None
+                if snapshot.execution_context is None
+                else ExecutionContext.from_dict(snapshot.execution_context)
             ),
         )
 

@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
 
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+
+from cosecha.workspace import build_execution_context, resolve_workspace
 
 from cosecha.core.config import Config, ConfigSnapshot
 from cosecha.core.instrumentation import (
@@ -22,6 +22,8 @@ from cosecha.core.knowledge_base import (
     PersistentKnowledgeBase,
     SessionArtifactQuery,
 )
+from cosecha.core.runtime_protocol import build_runtime_message_id
+from cosecha.core.shadow_execution import ShadowExecutionContext
 
 _SESSION_ARTIFACT_RETRY_ATTEMPTS = 3
 _SESSION_ARTIFACT_RETRY_DELAY_SECONDS = 0.05
@@ -170,9 +172,22 @@ def _emit_coverage_warning(
     console.print_summary('Coverage Warning', message)
 
 
+def _build_launcher_shadow_context() -> ShadowExecutionContext:
+    workspace = resolve_workspace(start_path=Path.cwd())
+    execution_context = build_execution_context(
+        workspace,
+        invocation_id=build_runtime_message_id(),
+    )
+    session_id = execution_context.invocation_id or build_runtime_message_id()
+    return ShadowExecutionContext.for_session(
+        knowledge_storage_root=execution_context.knowledge_storage_root,
+        session_id=session_id,
+    ).materialize()
+
+
 def _bootstrap_coverage(argv: list[str]) -> int:
     try:
-        from cosecha.plugin.coverage import CoverageInstrumenter
+        from cosecha.instrumentation.coverage import CoverageInstrumenter
     except ImportError as error:
         print(
             'Coverage support is not installed. Install cosecha[coverage].',
@@ -184,10 +199,11 @@ def _bootstrap_coverage(argv: list[str]) -> int:
         return _run_runner_cli(argv)
 
     stripped_argv = instrumenter.strip_bootstrap_options(argv)
-    workdir = Path(tempfile.mkdtemp(prefix='cosecha-coverage-'))
-    cleanup_workdir = True
+    shadow_context = _build_launcher_shadow_context()
+    workdir = shadow_context.coverage_dir
+    preserve_shadow = False
     try:
-        metadata_path = workdir / 'run-metadata.json'
+        metadata_path = shadow_context.metadata_file
         contribution = instrumenter.prepare(workdir=workdir)
         for relative_path, contents in contribution.workdir_files.items():
             target_path = workdir / relative_path
@@ -198,6 +214,7 @@ def _bootstrap_coverage(argv: list[str]) -> int:
 
         env = os.environ.copy()
         env.update(contribution.env)
+        env.update(shadow_context.env())
         env[COSECHA_COVERAGE_ACTIVE_ENV] = '1'
         env[COSECHA_INSTRUMENTATION_METADATA_FILE_ENV] = str(metadata_path)
         command = [*contribution.argv_prefix, *stripped_argv]
@@ -209,8 +226,10 @@ def _bootstrap_coverage(argv: list[str]) -> int:
 
         metadata = _load_metadata(metadata_path)
         if metadata is None:
+            preserve_shadow = True
             _emit_coverage_warning(
-                'no session metadata was written; coverage was not persisted.',
+                'no session metadata was written; coverage was not persisted. '
+                f'Preserved shadow dir: {shadow_context.root_path}',
             )
             return int(completed.returncode)
         metadata_config_snapshot = _config_snapshot_from_metadata(metadata)
@@ -237,15 +256,14 @@ def _bootstrap_coverage(argv: list[str]) -> int:
                     config_snapshot=updated_artifact.config_snapshot,
                 )
         except Exception as error:
-            cleanup_workdir = False
+            preserve_shadow = True
             _emit_coverage_warning(
                 'failed to collect coverage '
-                f'({error}). Preserved workdir: {workdir}',
+                f'({error}). Preserved shadow dir: {shadow_context.root_path}',
             )
         return int(completed.returncode)
     finally:
-        if cleanup_workdir:
-            shutil.rmtree(workdir, ignore_errors=True)
+        shadow_context.cleanup(preserve=preserve_shadow)
 
 
 _BOOTSTRAP_HANDLERS = ((_should_bootstrap_coverage, _bootstrap_coverage),)

@@ -61,6 +61,11 @@ from cosecha.core.scheduler import (
     assign_group_slots,
 )
 from cosecha.core.serialization import decode_json_dict, encode_json_bytes
+from cosecha.core.shadow_execution import (
+    ShadowExecutionContext,
+    resolve_shadow_execution_context,
+)
+from cosecha.workspace import ExecutionContext
 
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -571,7 +576,7 @@ class _PersistentWorker:
         self._stdout_reader_task = asyncio.create_task(self._read_stdout())
 
     @classmethod
-    async def start(
+    async def start(  # noqa: PLR0913
         cls,
         worker_id: int,
         *,
@@ -579,6 +584,7 @@ class _PersistentWorker:
         cwd: Path,
         root_path: Path,
         session_id: str,
+        shadow_context: ShadowExecutionContext | None = None,
     ) -> _PersistentWorker:
         process = await asyncio.create_subprocess_exec(
             python_executable,
@@ -594,7 +600,7 @@ class _PersistentWorker:
             '--session-id',
             session_id,
             cwd=cwd,
-            env=_build_worker_env(),
+            env=_build_worker_env(shadow_context=shadow_context),
             stderr=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.PIPE,
@@ -879,17 +885,21 @@ class ProcessRuntimeProvider(RuntimeProvider):
     __slots__ = (
         '_assigned_worker_by_node',
         '_bootstrap_plan',
+        '_config',
         '_cwd',
         '_degraded_worker_ids',
         '_domain_events',
+        '_execution_context',
         '_log_events',
         '_orphaned_resources',
+        '_preserve_shadow_context',
         '_resource_timings',
         '_root_path',
         '_run_materialization_snapshots',
         '_run_resource_manager',
         '_runtime_state_dir',
         '_session_id',
+        '_shadow_context',
         '_worker_count',
         '_worker_selection_policy',
         '_workers',
@@ -906,6 +916,7 @@ class ProcessRuntimeProvider(RuntimeProvider):
     ) -> None:
         self.executed_nodes: list[str] = []
         self.python_executable = python_executable or sys.executable
+        self._config = None
         self._worker_count = worker_count
         self._worker_selection_policy = (
             worker_selection_policy or RoundRobinWorkerSelectionPolicy()
@@ -920,11 +931,14 @@ class ProcessRuntimeProvider(RuntimeProvider):
         self._resource_timings: list[ResourceTiming] = []
         self._domain_events: list[DomainEvent] = []
         self._log_events: list[DomainEvent] = []
+        self._preserve_shadow_context = False
         self._run_materialization_snapshots: tuple[
             ResourceMaterializationSnapshot,
             ...,
         ] = ()
         self._runtime_state_dir: Path | None = None
+        self._execution_context: ExecutionContext | None = None
+        self._shadow_context: ShadowExecutionContext | None = None
         self._run_resource_manager = ResourceManager()
         self._orphaned_resources = _OrphanedResourceManager()
 
@@ -1077,9 +1091,24 @@ class ProcessRuntimeProvider(RuntimeProvider):
         return self._worker_selection_policy
 
     def initialize(self, config: Config) -> None:
-        self._cwd = _resolve_request_cwd(config.root_path)
+        self._config = config
+        self._cwd = (
+            config.execution_root_path
+            if config.execution_context is not None
+            else _resolve_request_cwd(config.root_path)
+        )
         self._root_path = config.root_path
-        self._runtime_state_dir = config.root_path / '.cosecha' / 'runtime'
+        self._execution_context = config.execution_context or ExecutionContext(
+            execution_root=self._cwd,
+            knowledge_storage_root=config.knowledge_storage_root_path,
+            workspace_fingerprint=(
+                None
+                if config.workspace is None
+                else config.workspace.fingerprint
+            ),
+        )
+        config.execution_context = self._execution_context
+        self._runtime_state_dir = None
         if self._worker_count is None:
             self._worker_count = max(1, config.concurrency)
 
@@ -1093,6 +1122,20 @@ class ProcessRuntimeProvider(RuntimeProvider):
 
         if self._session_id is None:
             self._session_id = build_runtime_message_id()
+        if self._execution_context is None or self._config is None:
+            msg = 'ProcessRuntimeProvider.initialize() must run before start()'
+            raise RuntimeError(msg)
+
+        (
+            self._execution_context,
+            self._shadow_context,
+        ) = resolve_shadow_execution_context(
+            self._execution_context,
+            session_id=self._session_id,
+        )
+        self._preserve_shadow_context = False
+        self._config.execution_context = self._execution_context
+        self._runtime_state_dir = self._shadow_context.runtime_state_dir
 
         worker_ids = tuple(range(max(1, self._worker_count or 1)))
         workers = await asyncio.gather(
@@ -1103,6 +1146,7 @@ class ProcessRuntimeProvider(RuntimeProvider):
                     cwd=self._cwd,
                     root_path=self._root_path,
                     session_id=self._session_id,
+                    shadow_context=self._shadow_context,
                 )
                 for worker_id in worker_ids
             ),
@@ -1186,7 +1230,12 @@ class ProcessRuntimeProvider(RuntimeProvider):
             raise RuntimeError(msg)
 
         request = ExecutionRequest.from_node(
-            self._cwd or _resolve_request_cwd(node.engine.config.root_path),
+            self._cwd
+            or (
+                node.engine.config.execution_root_path
+                if node.engine.config.execution_context is not None
+                else _resolve_request_cwd(node.engine.config.root_path)
+            ),
             self._root_path or node.engine.config.root_path,
             node,
         )
@@ -1252,6 +1301,11 @@ class ProcessRuntimeProvider(RuntimeProvider):
             )
             self._run_resource_manager = ResourceManager()
             self._session_id = None
+            if self._shadow_context is not None:
+                self._shadow_context.cleanup(
+                    preserve=self._preserve_shadow_context,
+                )
+                self._shadow_context = None
             return
 
         self._resource_timings.clear()
@@ -1290,6 +1344,11 @@ class ProcessRuntimeProvider(RuntimeProvider):
         )
         self._run_resource_manager = ResourceManager()
         self._run_materialization_snapshots = ()
+        if self._shadow_context is not None:
+            self._shadow_context.cleanup(
+                preserve=self._preserve_shadow_context,
+            )
+            self._shadow_context = None
         self._session_id = None
 
     def take_resource_timings(self):
@@ -1326,6 +1385,7 @@ class ProcessRuntimeProvider(RuntimeProvider):
     ) -> None:
         if worker.is_alive():
             return
+        self._preserve_shadow_context = True
 
         await self._orphaned_resources.reap_worker(
             worker.worker_id,
@@ -1362,6 +1422,7 @@ class ProcessRuntimeProvider(RuntimeProvider):
             cwd=self._cwd,
             root_path=self._root_path,
             session_id=self._session_id,
+            shadow_context=self._shadow_context,
         )
         if self._bootstrap_plan:
             await recovered_worker.bootstrap(
@@ -1524,11 +1585,7 @@ class ProcessRuntimeProvider(RuntimeProvider):
         if self._runtime_state_dir is None or self._session_id is None:
             return None
 
-        return (
-            self._runtime_state_dir
-            / self._session_id
-            / f'worker-{worker_id}.json'
-        )
+        return self._runtime_state_dir / f'worker-{worker_id}.json'
 
     def _delete_worker_state(
         self,
@@ -1548,7 +1605,10 @@ def _resolve_request_cwd(root_path: Path) -> Path:
     return root_path
 
 
-def _build_worker_env() -> dict[str, str]:
+def _build_worker_env(
+    *,
+    shadow_context: ShadowExecutionContext | None = None,
+) -> dict[str, str]:
     env = os.environ.copy()
     src_path = Path(__file__).resolve().parents[2]
     current_pythonpath = env.get('PYTHONPATH')
@@ -1557,6 +1617,8 @@ def _build_worker_env() -> dict[str, str]:
         if current_pythonpath
         else str(src_path)
     )
+    if shadow_context is not None:
+        env.update(shadow_context.env())
     return env
 
 

@@ -200,16 +200,18 @@ def test_process_runtime_provider_starts_workers_in_parallel(
         def __init__(self, worker_id: int) -> None:
             self.worker_id = worker_id
 
-    async def _fake_start(
+    async def _fake_start(  # noqa: PLR0913
         worker_id: int,
         *,
         python_executable: str,
         cwd,
         root_path,
         session_id: str,
+        shadow_context=None,
     ) -> _FakeWorker:
         nonlocal active_starts, max_active_starts
         del python_executable, cwd, root_path, session_id
+        assert shadow_context is not None
         active_starts += 1
         max_active_starts = max(max_active_starts, active_starts)
         await asyncio.sleep(0)
@@ -230,6 +232,8 @@ def test_process_runtime_provider_starts_workers_in_parallel(
         2,
     ]
     assert max_active_starts >= PARALLEL_START_MIN_CONCURRENCY
+    assert runtime_provider._shadow_context is not None
+    assert runtime_provider._shadow_context.runtime_state_dir.exists()
 
 
 def test_process_runtime_provider_executes_test_body_in_worker(

@@ -17,6 +17,7 @@ from cosecha.core.session_artifacts import (
     SessionTimingSnapshot,
     SessionArtifactPersistencePolicy,
 )
+from cosecha.core.shadow_execution import ShadowExecutionContext
 from cosecha.shell.launcher import (
     _bootstrap_coverage,
     _render_coverage_summary,
@@ -38,6 +39,7 @@ def test_should_bootstrap_coverage_only_for_run_commands_with_cov(
     assert _should_bootstrap_coverage(['run', '--cov', 'src/demo']) is False
 def test_bootstrap_coverage_reexecutes_under_coverage(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     recorded: dict[str, object] = {}
 
@@ -53,6 +55,10 @@ def test_bootstrap_coverage_reexecutes_under_coverage(
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr('cosecha.shell.launcher.subprocess.run', fake_run)
+    monkeypatch.setattr(
+        'cosecha.shell.launcher._build_launcher_shadow_context',
+        lambda: ShadowExecutionContext(root_path=tmp_path / 'shadow').materialize(),
+    )
     monkeypatch.setattr(
         'cosecha.shell.launcher._update_session_artifact',
         lambda metadata, *, summary: recorded.update(
@@ -83,7 +89,7 @@ def test_bootstrap_coverage_reexecutes_under_coverage(
         ),
     )
     monkeypatch.setattr(
-        'cosecha.plugin.coverage.CoverageInstrumenter.collect',
+        'cosecha.instrumentation.coverage.CoverageInstrumenter.collect',
         lambda self, *, workdir: SimpleNamespace(
             instrumentation_name='coverage',
             payload={'total_coverage': 87.5},
@@ -117,6 +123,7 @@ def test_bootstrap_coverage_reexecutes_under_coverage(
         'run',
     ]
     assert recorded['env']['COSECHA_COVERAGE_ACTIVE'] == '1'
+    assert recorded['env']['COSECHA_SHADOW_ROOT'] == str(tmp_path / 'shadow')
     assert recorded['metadata']['session_id'] == 'session-1'
     assert recorded['summary'].instrumentation_name == 'coverage'
     assert recorded['config_snapshot'].output_mode == 'summary'
@@ -126,6 +133,7 @@ def test_bootstrap_coverage_reexecutes_under_coverage(
 def test_bootstrap_coverage_warns_when_summary_is_not_persisted(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path,
 ) -> None:
     def fake_run(command, *, check, env):
         del command, check
@@ -138,6 +146,10 @@ def test_bootstrap_coverage_warns_when_summary_is_not_persisted(
 
     monkeypatch.setattr('cosecha.shell.launcher.subprocess.run', fake_run)
     monkeypatch.setattr(
+        'cosecha.shell.launcher._build_launcher_shadow_context',
+        lambda: ShadowExecutionContext(root_path=tmp_path / 'shadow').materialize(),
+    )
+    monkeypatch.setattr(
         'cosecha.shell.launcher._update_session_artifact',
         lambda metadata, *, summary: (None, 'session artifact not found'),
     )
@@ -148,7 +160,7 @@ def test_bootstrap_coverage_warns_when_summary_is_not_persisted(
         ),
     )
     monkeypatch.setattr(
-        'cosecha.plugin.coverage.CoverageInstrumenter.collect',
+        'cosecha.instrumentation.coverage.CoverageInstrumenter.collect',
         lambda self, *, workdir: SimpleNamespace(
             instrumentation_name='coverage',
             payload={'total_coverage': 87.5},
@@ -374,6 +386,7 @@ def test_launcher_main_uses_internal_bootstrap_handlers(
 
 def test_bootstrap_coverage_renders_from_metadata_when_persistence_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     recorded: dict[str, object] = {}
 
@@ -402,7 +415,11 @@ def test_bootstrap_coverage_renders_from_metadata_when_persistence_is_unavailabl
 
     monkeypatch.setattr('cosecha.shell.launcher.subprocess.run', fake_run)
     monkeypatch.setattr(
-        'cosecha.plugin.coverage.CoverageInstrumenter.collect',
+        'cosecha.shell.launcher._build_launcher_shadow_context',
+        lambda: ShadowExecutionContext(root_path=tmp_path / 'shadow').materialize(),
+    )
+    monkeypatch.setattr(
+        'cosecha.instrumentation.coverage.CoverageInstrumenter.collect',
         lambda self, *, workdir: SimpleNamespace(
             instrumentation_name='coverage',
             payload={'total_coverage': 87.5},

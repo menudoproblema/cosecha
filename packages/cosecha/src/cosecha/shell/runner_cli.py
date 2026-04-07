@@ -10,6 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, assert_never
 
+from cosecha.workspace import (
+    ExecutionContext,
+    WorkspaceResolutionError,
+    build_execution_context,
+    resolve_workspace,
+)
+
 from cosecha.core.config import Config
 from cosecha.core.cosecha_manifest import (
     CosechaManifest,
@@ -21,6 +28,7 @@ from cosecha.core.cosecha_manifest import (
     validate_cosecha_manifest,
 )
 from cosecha.core.instrumentation import (
+    COSECHA_SHADOW_ROOT_ENV,
     COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
 )
 from cosecha.core.discovery import (
@@ -66,6 +74,10 @@ from cosecha.core.runner import (
     root_logger,
 )
 from cosecha.core.runtime import LocalRuntimeProvider, ProcessRuntimeProvider
+from cosecha.core.shadow_execution import (
+    ShadowExecutionContext,
+    bind_shadow_execution_context,
+)
 from cosecha.core.utils import setup_available_plugins, setup_engines
 
 
@@ -350,6 +362,9 @@ type CliRequest = (
 EXIT_TEST_FAILURES = 1
 EXIT_USAGE_ERROR = 2
 EXIT_RUNTIME_ERROR = 3
+# Matches pytest's EXIT_NOTESTSCOLLECTED so callers (humans, LLMs, CI)
+# can distinguish "selection matched nothing" from "all tests passed".
+EXIT_NO_TESTS_COLLECTED = 5
 
 
 def _create_bootstrap_parser() -> argparse.ArgumentParser:
@@ -1692,12 +1707,18 @@ def _register_session_event_query_arguments(
 
 
 def _resolve_root_path() -> Path:
-    root_path = Path()
-    if root_path.is_dir():
-        tests_path = root_path / 'tests'
-        if tests_path.exists():
-            return tests_path
-    return root_path
+    return _resolve_workspace().knowledge_anchor
+
+
+def _resolve_workspace(
+    start_path: Path | None = None,
+):
+    try:
+        return resolve_workspace(start_path=start_path)
+    except (FileNotFoundError, WorkspaceResolutionError):
+        root_path = Path() if start_path is None else start_path
+        resolved_root = root_path.resolve()
+        return type('LegacyWorkspace', (), {'knowledge_anchor': resolved_root})()
 
 
 def _normalize_cli_path_selector(
@@ -1798,7 +1819,16 @@ def _build_config(args: Namespace) -> Config:
         output_detail = OutputDetail.FULL_FAILURES
 
     root_path = _resolve_root_path()
+    workspace = _resolve_workspace(start_path=root_path)
+    root_path = workspace.knowledge_anchor
     reports = _build_reports(args)
+    execution_context = (
+        None
+        if not hasattr(workspace, 'workspace_root')
+        else _bind_shadow_context_from_environment(
+            build_execution_context(workspace),
+        )
+    )
     return Config(
         root_path=root_path,
         output_mode=output_mode,
@@ -1812,6 +1842,8 @@ def _build_config(args: Namespace) -> Config:
         definition_paths=tuple(
             Path(definition_path) for definition_path in args.definition_paths
         ),
+        workspace=workspace if hasattr(workspace, 'workspace_root') else None,
+        execution_context=execution_context,
     )
 
 
@@ -1840,7 +1872,21 @@ def _build_selection(args: Namespace) -> CliSelection:
 
 
 def _build_query_config() -> Config:
-    return Config(root_path=_resolve_root_path())
+    root_path = _resolve_root_path()
+    workspace = _resolve_workspace(start_path=root_path)
+    root_path = workspace.knowledge_anchor
+    execution_context = (
+        None
+        if not hasattr(workspace, 'workspace_root')
+        else _bind_shadow_context_from_environment(
+            build_execution_context(workspace),
+        )
+    )
+    return Config(
+        root_path=root_path,
+        workspace=workspace if hasattr(workspace, 'workspace_root') else None,
+        execution_context=execution_context,
+    )
 
 
 def _build_query_render_options(args: Namespace) -> QueryRenderOptions:
@@ -1859,6 +1905,31 @@ def _build_query_render_options(args: Namespace) -> QueryRenderOptions:
         fields=fields,
         view=getattr(args, 'query_view', 'full'),
         preset=getattr(args, 'query_preset', None),
+    )
+
+
+def _resolve_workspace_context_for_path(
+    root_path: Path,
+):
+    workspace = resolve_workspace(start_path=root_path)
+    return (
+        workspace,
+        _bind_shadow_context_from_environment(
+            build_execution_context(workspace),
+        ),
+    )
+
+
+def _bind_shadow_context_from_environment(
+    execution_context: ExecutionContext,
+) -> ExecutionContext:
+    raw_shadow_root = os.environ.get(COSECHA_SHADOW_ROOT_ENV)
+    if not raw_shadow_root:
+        return execution_context
+
+    return bind_shadow_execution_context(
+        execution_context,
+        ShadowExecutionContext(root_path=Path(raw_shadow_root).resolve()),
     )
 
 
@@ -2736,7 +2807,7 @@ def _execute_manifest_show(
 def _serialize_manifest_explanation_payload(
     explanation,
 ) -> dict[str, object]:
-    return {
+    payload = {
         'manifest': {
             'path': explanation.manifest_path,
             'schema_version': explanation.schema_version,
@@ -2773,6 +2844,14 @@ def _serialize_manifest_explanation_payload(
             ],
         },
     }
+    if explanation.workspace is not None:
+        payload['workspace'] = explanation.workspace
+        workspace_fingerprint = explanation.workspace.get('fingerprint')
+        if workspace_fingerprint is not None:
+            payload['workspace_fingerprint'] = workspace_fingerprint
+    if explanation.execution_context is not None:
+        payload['execution_context'] = explanation.execution_context
+    return payload
 
 
 def _execute_manifest_explain(
@@ -2784,30 +2863,51 @@ def _execute_manifest_explain(
         sys.exit(EXIT_USAGE_ERROR)
 
     manifest = apply_manifest_cli_overrides(manifest, request.args)
+    workspace = resolve_workspace(start_path=request.root_path)
     explanation = explain_cosecha_manifest(
         manifest,
-        config=Config(root_path=request.root_path),
+        config=Config(
+            root_path=workspace.knowledge_anchor,
+            workspace=workspace,
+            execution_context=_bind_shadow_context_from_environment(
+                build_execution_context(workspace),
+            ),
+        ),
         selected_engine_names=request.selection.selected_engine_names(),
         requested_paths=request.selection.requested_paths(),
     )
     _print_json_payload(_serialize_manifest_explanation_payload(explanation))
 
 
-def _iter_knowledge_base_file_paths(root_path: Path) -> tuple[Path, ...]:
+def _iter_knowledge_base_file_paths(
+    root_path: Path,
+    *,
+    storage_root: Path | None = None,
+) -> tuple[Path, ...]:
     all_paths: list[Path] = []
+    if storage_root is not None:
+        for file_path in build_knowledge_base_file_paths(storage_root / 'kb.db'):
+            if file_path not in all_paths:
+                all_paths.append(file_path)
+
     for relative_db_path in (KNOWLEDGE_BASE_PATH, LEGACY_KNOWLEDGE_BASE_PATH):
-        for file_path in build_knowledge_base_file_paths(
-            root_path / relative_db_path,
-        ):
+        for file_path in build_knowledge_base_file_paths(root_path / relative_db_path):
             if file_path not in all_paths:
                 all_paths.append(file_path)
 
     return tuple(all_paths)
 
 
-def _delete_knowledge_base_files(root_path: Path) -> tuple[Path, ...]:
+def _delete_knowledge_base_files(
+    root_path: Path,
+    *,
+    storage_root: Path | None = None,
+) -> tuple[Path, ...]:
     removed_paths: list[Path] = []
-    for file_path in _iter_knowledge_base_file_paths(root_path):
+    for file_path in _iter_knowledge_base_file_paths(
+        root_path,
+        storage_root=storage_root,
+    ):
         if file_path.exists():
             file_path.unlink()
             removed_paths.append(file_path)
@@ -2816,11 +2916,18 @@ def _delete_knowledge_base_files(root_path: Path) -> tuple[Path, ...]:
 
 
 def _execute_knowledge_reset(request: KnowledgeResetCliRequest) -> None:
-    db_path = resolve_knowledge_base_path(
+    workspace, execution_context = _resolve_workspace_context_for_path(
         request.root_path,
+    )
+    db_path = resolve_knowledge_base_path(
+        workspace.workspace_root,
+        knowledge_storage_root=execution_context.knowledge_storage_root,
         migrate_legacy=False,
     )
-    removed_paths = _delete_knowledge_base_files(request.root_path)
+    removed_paths = _delete_knowledge_base_files(
+        workspace.workspace_root,
+        storage_root=execution_context.knowledge_storage_root,
+    )
     if not removed_paths:
         print(f'Knowledge base already absent: {db_path}')
         return
@@ -2831,10 +2938,14 @@ def _execute_knowledge_reset(request: KnowledgeResetCliRequest) -> None:
 def _execute_knowledge_rebuild(request: KnowledgeRebuildCliRequest) -> None:
     context = request.context
     db_path = resolve_knowledge_base_path(
-        context.config.root_path,
+        context.config.workspace_root_path,
+        knowledge_storage_root=context.config.knowledge_storage_root_path,
         migrate_legacy=False,
     )
-    _delete_knowledge_base_files(context.config.root_path)
+    _delete_knowledge_base_files(
+        context.config.workspace_root_path,
+        storage_root=context.config.knowledge_storage_root_path,
+    )
 
     hooks, engines = context.setup_runtime_components()
     runner = Runner(
@@ -3343,9 +3454,16 @@ def _check_doctor_manifest(
         return
 
     manifest = apply_manifest_cli_overrides(manifest, request.args)
+    workspace = resolve_workspace(start_path=request.root_path)
     explanation = explain_cosecha_manifest(
         manifest,
-        config=Config(root_path=request.root_path),
+        config=Config(
+            root_path=workspace.knowledge_anchor,
+            workspace=workspace,
+            execution_context=_bind_shadow_context_from_environment(
+                build_execution_context(workspace),
+            ),
+        ),
         selected_engine_names=request.selection.selected_engine_names(),
         requested_paths=request.selection.requested_paths(),
     )
@@ -3392,7 +3510,13 @@ def _check_doctor_manifest(
 
     try:
         setup_engines(
-            Config(root_path=request.root_path),
+            Config(
+                root_path=workspace.knowledge_anchor,
+                workspace=workspace,
+                execution_context=_bind_shadow_context_from_environment(
+                    build_execution_context(workspace),
+                ),
+            ),
             args=request.args,
             selected_engine_names=request.selection.selected_engine_names(),
             requested_paths=request.selection.requested_paths(),
@@ -3406,8 +3530,12 @@ def _check_doctor_knowledge_base(
     *,
     issues: list[str],
 ) -> None:
-    db_path = resolve_knowledge_base_path(
+    workspace, execution_context = _resolve_workspace_context_for_path(
         request.root_path,
+    )
+    db_path = resolve_knowledge_base_path(
+        workspace.workspace_root,
+        knowledge_storage_root=execution_context.knowledge_storage_root,
         migrate_legacy=False,
     )
     if not db_path.exists():
@@ -3453,6 +3581,19 @@ def _execute_doctor(
 ) -> None:
     issues: list[str] = []
     print(f'Root path: {request.root_path}')
+    try:
+        workspace, execution_context = _resolve_workspace_context_for_path(
+            request.root_path,
+        )
+        print(f'Workspace root: {workspace.workspace_root}')
+        print(f'Workspace fingerprint: {workspace.fingerprint}')
+        print(f'Execution root: {execution_context.execution_root}')
+        print(
+            'Knowledge storage root: '
+            f'{execution_context.knowledge_storage_root}'
+        )
+    except Exception:
+        pass
     _print_doctor_selection(request.selection)
     _check_doctor_manifest(request, issues=issues)
     _check_doctor_knowledge_base(request, issues=issues)
@@ -3515,10 +3656,13 @@ def _execute_runtime_request(request: CliRequest) -> None:
         assert_never(request)
 
     result = asyncio.run(runner.execute_operation(operation))
-    if isinstance(result, RunOperationResult) and result.has_failures:
-        sys.exit(EXIT_TEST_FAILURES)
-    if not isinstance(result, RunOperationResult):
-        _print_json_payload(result.to_dict())
+    if isinstance(result, RunOperationResult):
+        if result.has_failures:
+            sys.exit(EXIT_TEST_FAILURES)
+        if result.total_tests == 0:
+            sys.exit(EXIT_NO_TESTS_COLLECTED)
+        return
+    _print_json_payload(result.to_dict())
 
 
 def _execute_non_runtime_request(request: CliRequest) -> bool:

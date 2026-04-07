@@ -39,6 +39,7 @@ from cosecha.core.execution_runtime import (
     ExecutionBodyOptions,
     execute_test_body,
 )
+from cosecha.core.instrumentation import COSECHA_RUNTIME_STATE_DIR_ENV
 from cosecha.core.reporting_ir import serialize_test_report
 from cosecha.core.resources import ResourceManager
 from cosecha.core.runtime_protocol import (
@@ -70,6 +71,13 @@ _CONTROL_STDOUT = sys.stdout
 _RUNTIME_STATE_DIR = Path('.cosecha/runtime')
 _ROOT_LOGGER = logging.getLogger()
 WORKER_HEARTBEAT_INTERVAL_SECONDS = 5.0
+
+
+def _resolve_worker_state_root(root_path: Path) -> Path:
+    runtime_state_root = os.environ.get(COSECHA_RUNTIME_STATE_DIR_ENV)
+    if runtime_state_root:
+        return Path(runtime_state_root).resolve()
+    return (root_path / _RUNTIME_STATE_DIR).resolve()
 
 
 class _WorkerStateRegistrySink(DomainEventSink):
@@ -354,9 +362,7 @@ class _PersistentWorkerSession:
             self._streamed_event_ids,
         )
         self._worker_state_sink = _WorkerStateRegistrySink(
-            root_path
-            / _RUNTIME_STATE_DIR
-            / session_id
+            _resolve_worker_state_root(root_path)
             / f'worker-{worker_id}.json',
             worker_id=worker_id,
         )

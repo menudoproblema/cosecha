@@ -12,6 +12,7 @@ from cosecha.core.resources import (
 from cosecha.core.runtime_protocol import RuntimeEnvelopeMetadata
 from cosecha.core.runtime_worker import (
     _build_worker_error_response,
+    _resolve_worker_state_root,
     _WorkerStateRegistrySink,
 )
 from cosecha.core.serialization import decode_json_dict
@@ -130,3 +131,12 @@ def test_build_worker_error_response_uses_local_unhealthy_fallback() -> None:
 
     assert response.error.code == 'worker_local_unhealthy'
 
+
+def test_resolve_worker_state_root_honors_environment_override(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_root = tmp_path / 'shadow' / 'runtime'
+    monkeypatch.setenv('COSECHA_RUNTIME_STATE_DIR', str(state_root))
+
+    assert _resolve_worker_state_root(tmp_path) == state_root.resolve()
