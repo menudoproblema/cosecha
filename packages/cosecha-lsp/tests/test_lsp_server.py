@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -37,6 +38,7 @@ from cosecha_internal.testkit import build_config
 from cosecha_lsp.lsp_server import (
     CosechaLanguageServer,
     build_completion_items_from_suggestions,
+    build_locations_from_resolved_definitions,
     build_resolved_definitions_from_knowledge,
     resolve_workspace_root_path,
 )
@@ -86,7 +88,9 @@ def test_resolve_workspace_root_path_supports_root_layout(tmp_path) -> None:
     assert resolve_workspace_root_path(tmp_path) == tmp_path.resolve()
 
 
-def test_resolve_workspace_root_path_raises_without_workspace(tmp_path) -> None:
+def test_resolve_workspace_root_path_raises_without_workspace(
+    tmp_path,
+) -> None:
     orphan_path = tmp_path / 'feature.feature'
     orphan_path.write_text('Feature: Demo\n', encoding='utf-8')
 
@@ -207,6 +211,46 @@ def test_lsp_server_falls_back_to_knowledge_base_for_gherkin_engine(
     server.read_only_knowledge_base.close()
 
 
+def test_lsp_server_passes_absolute_path_to_runner_find_engine(
+    tmp_path,
+) -> None:
+    feature_path = tmp_path / 'features' / 'example.feature'
+    feature_path.parent.mkdir(parents=True)
+    feature_path.write_text('Feature: Example\n', encoding='utf-8')
+
+    captured: dict[str, object] = {}
+    gherkin_engine = SimpleNamespace(name='gherkin')
+
+    def _find_engine(test_file):
+        captured['test_file'] = test_file
+        return gherkin_engine
+
+    server = CosechaLanguageServer('cosecha-lsp-test', '0.1')
+    server.config = build_config(tmp_path)
+    server.runner = SimpleNamespace(find_engine=_find_engine)
+    server.engines = {'gherkin': gherkin_engine}
+    server.read_only_knowledge_base = None
+
+    resolved_engine = server.find_gherkin_engine(feature_path.as_uri())
+
+    assert resolved_engine is gherkin_engine
+    assert Path(str(captured['test_file'])) == feature_path.resolve()
+
+
+def test_lsp_server_find_engine_does_not_raise_outside_workspace(
+    tmp_path,
+) -> None:
+    server = CosechaLanguageServer('cosecha-lsp-test', '0.1')
+    server.config = build_config(tmp_path)
+    server.runner = SimpleNamespace(find_engine=lambda _test_file: None)
+    server.engines = {}
+    server.read_only_knowledge_base = None
+
+    resolved_engine = server.find_gherkin_engine(Path(__file__).as_uri())
+
+    assert resolved_engine is None
+
+
 def test_build_resolved_definitions_from_knowledge_dedupes_records() -> None:
     duplicate_record = build_gherkin_definition_record(
         source_line=7,
@@ -233,6 +277,28 @@ def test_build_resolved_definitions_from_knowledge_dedupes_records() -> None:
     assert resolved[0].file_path == 'steps/demo.py'
     assert resolved[0].function_name == 'step_demo'
     assert resolved[0].resolution_source == 'static_catalog'
+
+
+def test_build_locations_from_resolved_definitions_returns_file_uris(
+    tmp_path,
+) -> None:
+    definition_path = tmp_path / 'steps' / 'demo_steps.py'
+    locations = build_locations_from_resolved_definitions(
+        (
+            ResolvedDefinition(
+                engine_name='gherkin',
+                file_path=str(definition_path),
+                line=12,
+                step_type='given',
+                patterns=('missing step',),
+                function_name='missing_step_definition',
+                documentation='Definition docs.',
+                resolution_source='static_catalog',
+            ),
+        ),
+    )
+
+    assert locations[0].uri == definition_path.resolve().as_uri()
 
 
 def test_build_completion_items_from_suggestions_preserves_metadata() -> None:

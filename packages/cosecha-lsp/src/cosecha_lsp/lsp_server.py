@@ -209,10 +209,13 @@ class CosechaLanguageServer(LanguageServer):
         return None
 
     def find_gherkin_engine(self, uri: str):
-        full_path = Path(uri.removeprefix('file://'))
-        test_file = full_path.relative_to(self.config.root_path.parent)
-        logger.debug(f'Looking engine for document "{test_file}"')
-        engine = self.runner.find_engine(test_file)
+        full_path = uri_to_path(uri).resolve()
+        try:
+            log_path = full_path.relative_to(self.config.root_path)
+        except ValueError:
+            log_path = full_path
+        logger.debug(f'Looking engine for document "{log_path}"')
+        engine = self.runner.find_engine(full_path)
 
         if engine and not _is_gherkin_engine(engine):
             msg = f'Invalid engine: {engine}'
@@ -440,15 +443,13 @@ async def feature_completions(params: CompletionParams):
             )
 
             if step_match_line:
-                suggestions = (
-                    await server.suggest_gherkin_step_completions(
-                        document=document,
-                        step_type=step_match_line.step_type,
-                        initial_text=step_match_line.step_text,
-                        cursor_column=params.position.character,
-                        start_step_text_column=(
-                            step_match_line.start_step_text_line
-                        ),
+                suggestions = await server.suggest_gherkin_step_completions(
+                    document=document,
+                    step_type=step_match_line.step_type,
+                    initial_text=step_match_line.step_text,
+                    cursor_column=params.position.character,
+                    start_step_text_column=(
+                        step_match_line.start_step_text_line
                     ),
                 )
                 items.extend(build_completion_items_from_suggestions(suggestions))
@@ -658,7 +659,7 @@ def build_locations_from_resolved_definitions(
         )
         locations.append(
             Location(
-                uri=str(Path(definition.file_path).resolve()),
+                uri=Path(definition.file_path).resolve().as_uri(),
                 range=Range(start=position, end=position),
             ),
         )
