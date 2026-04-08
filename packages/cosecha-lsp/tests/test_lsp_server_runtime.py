@@ -75,7 +75,7 @@ def test_start_handles_broken_pipe_and_closes_resources(
     )
 
     assert close_calls == [True]
-    assert shutdown_calls == [True]
+    assert shutdown_calls == []
 
 
 def test_start_handles_keyboard_interrupt(
@@ -118,7 +118,7 @@ def test_start_handles_keyboard_interrupt(
         ),
     )
 
-    assert shutdown_calls == [True]
+    assert shutdown_calls == []
 
 
 def test_open_read_only_knowledge_base_handles_missing_file_and_open_error(
@@ -565,3 +565,71 @@ def test_main_bootstraps_registry_workspace_and_server(
     assert captured['registry'] is registry
     assert captured['start'][1] == ['hook-a']
     assert list(captured['start'][2]) == ['gherkin']
+
+
+def test_main_shuts_down_after_run_until_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    registry = object()
+    workspace = SimpleNamespace(knowledge_anchor=Path('/workspace/tests'))
+
+    @contextmanager
+    def _using_discovery_registry(current_registry):
+        yield current_registry
+
+    class _FakeConfig:
+        def __init__(
+            self,
+            root_path,
+            *,
+            capture_log,
+            workspace,
+            execution_context,
+        ) -> None:
+            del capture_log, workspace, execution_context
+            self.root_path = root_path
+
+    async def _fake_start(config, hooks, engines):
+        del config, hooks, engines
+        calls.append('start')
+
+    def _fake_shutdown() -> None:
+        calls.append('shutdown')
+
+    monkeypatch.setattr(
+        lsp_server,
+        'create_loaded_discovery_registry',
+        lambda: registry,
+    )
+    monkeypatch.setattr(
+        lsp_server,
+        'using_discovery_registry',
+        _using_discovery_registry,
+    )
+    monkeypatch.setattr(lsp_server, 'resolve_workspace', lambda: workspace)
+    monkeypatch.setattr(
+        lsp_server,
+        'build_execution_context',
+        lambda _workspace: SimpleNamespace(execution_root=Path('/workspace')),
+    )
+    monkeypatch.setattr(lsp_server, 'Config', _FakeConfig)
+    monkeypatch.setattr(
+        lsp_server,
+        'setup_engines',
+        lambda _config: (
+            ['hook-a'],
+            {'gherkin': SimpleNamespace(name='gherkin')},
+        ),
+    )
+    monkeypatch.setattr(lsp_server.server, 'start', _fake_start)
+    monkeypatch.setattr(lsp_server.server, 'shutdown', _fake_shutdown)
+    monkeypatch.setattr(
+        lsp_server.server.loop,
+        'run_until_complete',
+        lambda coro: asyncio.run(coro),
+    )
+
+    lsp_server.main()
+
+    assert calls == ['start', 'shutdown']
