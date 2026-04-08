@@ -1,8 +1,0 @@
-Name                                                     Stmts   Miss  Cover
-----------------------------------------------------------------------------
-packages/cosecha/src/cosecha/shell/__init__.py               1      0   100%
-packages/cosecha/src/cosecha/shell/launcher.py             170      0   100%
-packages/cosecha/src/cosecha/shell/mochuelo_runtime.py      23      0   100%
-packages/cosecha/src/cosecha/shell/runner_cli.py          1229      0   100%
-----------------------------------------------------------------------------
-TOTAL                                                     1423      0   100%

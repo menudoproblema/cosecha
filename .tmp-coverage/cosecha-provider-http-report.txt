@@ -1,9 +1,0 @@
-Name                                                                      Stmts   Miss  Cover
----------------------------------------------------------------------------------------------
-packages/cosecha-provider-http/src/cosecha/provider/http/__init__.py          2      0   100%
-packages/cosecha-provider-http/src/cosecha/provider/http/_version.py          2      0   100%
-packages/cosecha-provider-http/src/cosecha/provider/http/asgi_runner.py      36      0   100%
-packages/cosecha-provider-http/src/cosecha/provider/http/provider.py        729      0   100%
-packages/cosecha-provider-http/src/cosecha/provider/http/wsgi_runner.py      78      0   100%
----------------------------------------------------------------------------------------------
-TOTAL                                                                       847      0   100%
