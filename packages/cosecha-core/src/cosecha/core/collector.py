@@ -32,6 +32,9 @@ class Collector(ABC):
 
     def __init__(self, file_type: str):
         self.file_type = file_type
+        self.collected_files: set[Path] = set()
+        self.failed_files: set[Path] = set()
+        self.collected_tests: tuple[TestItem, ...] = ()
 
     def initialize(
         self,
@@ -43,6 +46,9 @@ class Collector(ABC):
         self._session_timing: SessionTiming | None = None
         self._engine_name: str = ''
         self._domain_event_stream: DomainEventStream | None = None
+        self.failed_files = set()
+        self.collected_files = set()
+        self.collected_tests = ()
 
     def bind_session_timing(
         self,

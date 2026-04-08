@@ -11,13 +11,17 @@ import {
     ServerOptions,
 } from 'vscode-languageclient/node';
 import {
+    collectSelectionLabelCounts,
     determineLanguageServerAction,
     determineLanguageServerAutostartPolicy,
     formatSessionStatusCounts,
+    groupTestsByAnchor,
     isNonRecoverableLanguageServerFailure,
     normalizeLanguageServerFailureMessage,
+    normalizeScenarioAnchorText,
     preferWorkspaceInterpreterShim,
     readSessionStatusCounts,
+    resolveCodeLensAnchorLine,
     resolveConfiguredInterpreterPath,
     shouldPreferWorkspaceInterpreterShim,
     selectPreferredWorkspacePath,
@@ -110,6 +114,7 @@ type TestRecord = {
     engine_name: string;
     test_name: string;
     test_path: string;
+    selection_labels?: string[];
     source_line?: number | null;
     status?: string | null;
     duration?: number | null;
@@ -221,6 +226,10 @@ type BridgeOperation = keyof BridgeOperationMap;
 class CosechaTreeNode extends vscode.TreeItem {
     children?: CosechaTreeNode[];
     sessionTarget?: SessionContextTarget;
+    testRecords?: TestRecord[];
+    anchorLine?: number;
+    documentPath?: string;
+    workspacePath?: string;
 
     constructor(
         label: string,
@@ -444,6 +453,7 @@ implements vscode.TreeDataProvider<CosechaTreeNode> {
                 ]);
                 rootItems.push(
                     buildCurrentFileTestsNode(
+                        activeDocument,
                         tests,
                         latestSession.sessionId,
                         workspaceFolder.uri.fsPath,
@@ -586,6 +596,12 @@ implements vscode.TreeDataProvider<CosechaTreeNode> {
                 'cosecha.showKnowledgeBaseInfo',
             ),
             buildActionNode(
+                'Run by label',
+                'Selecciona una label efectiva y ejecuta Cosecha con ella.',
+                'symbol-key',
+                'cosecha.runByLabel',
+            ),
+            buildActionNode(
                 'Refresh views',
                 'Recarga Knowledge Base, sesiones y CodeLens.',
                 'refresh',
@@ -649,7 +665,7 @@ class CosechaCodeLensProvider implements vscode.CodeLensProvider {
         lenses.push(
             new vscode.CodeLens(topRange, {
                 command: 'cosecha.runTestPath',
-                title: 'Run Cosecha',
+                title: 'Run File',
                 arguments: [
                     toCosechaSelector(relativePath),
                     path.basename(relativePath),
@@ -682,27 +698,52 @@ class CosechaCodeLensProvider implements vscode.CodeLensProvider {
                 getLatestSessionResult(bridge),
                 bridge.queryTestsForFile(document.uri.fsPath),
             ]);
-            for (const test of tests) {
-                if (test.source_line == null || test.source_line <= 0) {
-                    continue;
-                }
+            const documentLines = Array.from(
+                { length: document.lineCount },
+                (_, index) => document.lineAt(index).text,
+            );
+            for (const { anchorLine, tests: groupedTests } of groupTestsByAnchor({
+                documentLines,
+                tests,
+            }).values()) {
+                const primaryTest = groupedTests[0];
                 const range = new vscode.Range(
-                    test.source_line - 1,
+                    anchorLine,
                     0,
-                    test.source_line - 1,
+                    anchorLine,
                     0,
                 );
-                const lastSessionStatus = resolveLastSessionStatus(
-                    test,
-                    latestSession.sessionId,
+                const lastSessionStatus = summarizeStatusesOrUndefined(
+                    groupedTests
+                        .map((test) => resolveLastSessionStatus(
+                            test,
+                            latestSession.sessionId,
+                        ))
+                        .filter(
+                            (status): status is LastSessionStatus => status !== undefined,
+                        ),
                 );
+                const runTitle = groupedTests.length > 1
+                    ? `Run Scenario (${groupedTests.length})`
+                    : 'Run Scenario';
+                const kbTitle = groupedTests.length > 1
+                    ? `Show KB Records (${groupedTests.length})`
+                    : 'Show KB Record';
                 lenses.push(
                     new vscode.CodeLens(range, {
-                        command: 'cosecha.runTestPath',
-                        title: 'Run with Cosecha',
+                        command: 'cosecha.runScenario',
+                        title: runTitle,
                         arguments: [
-                            test.test_path,
-                            test.test_name,
+                            groupedTests,
+                            workspaceFolder.uri.fsPath,
+                        ],
+                    }),
+                    new vscode.CodeLens(range, {
+                        command: 'cosecha.runTestPath',
+                        title: 'Run File',
+                        arguments: [
+                            primaryTest.test_path,
+                            primaryTest.test_name,
                             workspaceFolder.uri.fsPath,
                         ],
                     }),
@@ -712,16 +753,24 @@ class CosechaCodeLensProvider implements vscode.CodeLensProvider {
                                 command: 'cosecha.showSessionArtifact',
                                 title: formatLastSessionTitle(lastSessionStatus),
                                 arguments: [
-                                    test.session_id,
+                                    primaryTest.session_id,
                                     workspaceFolder.uri.fsPath,
                                 ],
                             }),
                         ]
                         : []),
                     new vscode.CodeLens(range, {
-                        command: 'cosecha.showTestRecord',
-                        title: 'Show KB Record',
-                        arguments: [test],
+                        command: groupedTests.length > 1
+                            ? 'cosecha.openJsonPayload'
+                            : 'cosecha.showTestRecord',
+                        title: kbTitle,
+                        arguments: groupedTests.length > 1
+                            ? [
+                                `Cosecha Tests: ${primaryTest.test_name}`,
+                                { tests: groupedTests },
+                                workspaceFolder.uri.fsPath,
+                            ]
+                            : [primaryTest],
                     }),
                 );
             }
@@ -730,6 +779,85 @@ class CosechaCodeLensProvider implements vscode.CodeLensProvider {
         }
 
         return lenses;
+    }
+}
+
+class ScenarioLabelsHoverProvider implements vscode.HoverProvider {
+    async provideHover(
+        document: vscode.TextDocument,
+        position: vscode.Position,
+    ): Promise<vscode.Hover | undefined> {
+        if (
+            document.languageId !== 'gherkin'
+            || !isWorkspaceDocument(document)
+        ) {
+            return undefined;
+        }
+
+        const lineText = document.lineAt(position.line).text.trim();
+        if (
+            !lineText.startsWith('Scenario:')
+            && !lineText.startsWith('Scenario Outline:')
+        ) {
+            return undefined;
+        }
+
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(
+            document.uri,
+        );
+        if (!workspaceFolder) {
+            return undefined;
+        }
+
+        try {
+            const bridge = new CosechaBridge(workspaceFolder.uri.fsPath);
+            const tests = await bridge.queryTestsForFile(document.uri.fsPath);
+            const groupedTests = findScenarioTestRecordsAtLine(
+                document,
+                tests,
+                position.line,
+            );
+            if (groupedTests.length === 0) {
+                return undefined;
+            }
+
+            const labels = Array.from(
+                collectSelectionLabelCounts(groupedTests).keys(),
+            );
+            if (labels.length === 0) {
+                return undefined;
+            }
+
+            const runtimeRequirements = labels.filter((label) =>
+                label.startsWith('@requires:'),
+            );
+            const markdown = new vscode.MarkdownString();
+            markdown.isTrusted = false;
+            markdown.appendMarkdown('**Effective labels**\n\n');
+            markdown.appendMarkdown(
+                labels.map((label) => `\`${escapeMarkdownCode(label)}\``).join(' '),
+            );
+
+            if (runtimeRequirements.length > 0) {
+                markdown.appendMarkdown('\n\n**Runtime requirements**\n\n');
+                markdown.appendMarkdown(
+                    runtimeRequirements
+                        .map((label) => `- \`${escapeMarkdownCode(label)}\``)
+                        .join('\n'),
+                );
+            }
+
+            markdown.appendMarkdown(
+                `\n\nRun one label with \`cosecha run --label ${escapeMarkdownCode(labels[0])}\`.`,
+            );
+
+            return new vscode.Hover(
+                markdown,
+                document.lineAt(position.line).range,
+            );
+        } catch {
+            return undefined;
+        }
     }
 }
 
@@ -760,6 +888,15 @@ class CosechaBridge {
                 test_path: filePath,
                 limit: 256,
             },
+        );
+        return response.tests;
+    }
+
+    async queryTests(limit = 5000): Promise<TestRecord[]> {
+        const response = await executeBridgeOperation(
+            this.workspacePath,
+            'query_tests',
+            { limit },
         );
         return response.tests;
     }
@@ -812,6 +949,7 @@ export async function activate(
     const sessionsTreeProvider = new SessionsTreeProvider();
     const quickActionsTreeProvider = new QuickActionsTreeProvider();
     const codeLensProvider = new CosechaCodeLensProvider();
+    const scenarioLabelsHoverProvider = new ScenarioLabelsHoverProvider();
     const lastSessionDecorations = new LastSessionDecorations(context);
 
     context.subscriptions.push(
@@ -831,6 +969,10 @@ export async function activate(
         vscode.languages.registerCodeLensProvider(
             [{ language: 'gherkin' }, { language: 'python' }],
             codeLensProvider,
+        ),
+        vscode.languages.registerHoverProvider(
+            { language: 'gherkin' },
+            scenarioLabelsHoverProvider,
         ),
     );
 
@@ -910,6 +1052,10 @@ function registerCommands(
             async () => clearPythonEnvironment(context, refreshViewsNow),
         ),
         vscode.commands.registerCommand(
+            'cosecha.runByLabel',
+            async () => runByLabel(),
+        ),
+        vscode.commands.registerCommand(
             'cosecha.showKnowledgeBaseInfo',
             async (workspacePath?: string) =>
                 showKnowledgeBaseInfo(workspacePath),
@@ -943,17 +1089,70 @@ function registerCommands(
         ),
         vscode.commands.registerCommand(
             'cosecha.runTestPath',
-            async (testPath: string, label?: string, workspacePath?: string) => {
+            async (
+                testPathOrNode: string | CosechaTreeNode,
+                label?: string,
+                workspacePath?: string,
+            ) => {
+                const testPath = typeof testPathOrNode === 'string'
+                    ? testPathOrNode
+                    : testPathOrNode.testRecords?.[0]?.test_path;
+                const resolvedLabel = typeof testPathOrNode === 'string'
+                    ? label
+                    : describeScenarioSelection(testPathOrNode.testRecords ?? []);
+                const resolvedWorkspacePath = typeof testPathOrNode === 'string'
+                    ? workspacePath
+                    : testPathOrNode.workspacePath ?? workspacePath;
+                if (!testPath) {
+                    void vscode.window.showWarningMessage(
+                        'No hay fichero de test seleccionado para ejecutar.',
+                    );
+                    return;
+                }
                 appendOutput(
                     `Run scope ${testPath}`
-                    + (label ? ` from ${label}` : ''),
+                    + (resolvedLabel ? ` from ${resolvedLabel}` : ''),
                 );
                 await runCliCommand(`run --path ${quote(testPath)}`, {
                     refreshAfterSuccess: true,
                     refreshScope: 'all',
-                    title: `Cosecha Run: ${label ?? testPath}`,
-                    workspaceFolder: getPreferredWorkspaceFolder(workspacePath),
+                    title: `Cosecha Run File: ${resolvedLabel ?? testPath}`,
+                    workspaceFolder: getPreferredWorkspaceFolder(
+                        resolvedWorkspacePath,
+                    ),
                 });
+            },
+        ),
+        vscode.commands.registerCommand(
+            'cosecha.runScenario',
+            async (
+                scenarioOrNode: TestRecord[] | CosechaTreeNode,
+                workspacePath?: string,
+            ) => {
+                const testRecords = Array.isArray(scenarioOrNode)
+                    ? scenarioOrNode
+                    : scenarioOrNode.testRecords;
+                const resolvedWorkspacePath = Array.isArray(scenarioOrNode)
+                    ? workspacePath
+                    : scenarioOrNode.workspacePath ?? workspacePath;
+                await runScenario(testRecords, resolvedWorkspacePath);
+            },
+        ),
+        vscode.commands.registerCommand(
+            'cosecha.revealTestRecord',
+            async (
+                nodeOrPath: CosechaTreeNode | string,
+                anchorLine?: number,
+            ) => {
+                if (typeof nodeOrPath === 'string') {
+                    await revealTestRecord(nodeOrPath, anchorLine);
+                    return;
+                }
+
+                await revealTestRecord(
+                    nodeOrPath.documentPath,
+                    nodeOrPath.anchorLine,
+                );
             },
         ),
         vscode.commands.registerCommand(
@@ -1561,6 +1760,56 @@ async function runCliCommand(
     return exitCode;
 }
 
+async function runScenario(
+    testRecords: TestRecord[] | undefined,
+    workspacePath?: string,
+): Promise<void> {
+    if (!testRecords || testRecords.length === 0) {
+        void vscode.window.showWarningMessage(
+            'No hay escenario seleccionado para ejecutar.',
+        );
+        return;
+    }
+
+    const workspaceFolder = getPreferredWorkspaceFolder(workspacePath);
+    const stableIds = Array.from(
+        new Set(
+            testRecords
+                .map((test) => test.node_stable_id?.trim())
+                .filter((value): value is string => Boolean(value)),
+        ),
+    );
+    const scenarioLabel = describeScenarioSelection(testRecords);
+    if (stableIds.length === 0) {
+        appendOutput(
+            `Scenario selection without stable ids; falling back to file run for ${scenarioLabel}`,
+        );
+        await runCliCommand(
+            `run --path ${quote(testRecords[0].test_path)}`,
+            {
+                refreshAfterSuccess: true,
+                refreshScope: 'all',
+                title: `Cosecha Run File: ${scenarioLabel}`,
+                workspaceFolder,
+            },
+        );
+        return;
+    }
+
+    const flags = stableIds
+        .map((stableId) => `--node-stable-id ${quote(stableId)}`)
+        .join(' ');
+    appendOutput(
+        `Run scenario ${scenarioLabel} (${stableIds.length} node ids)`,
+    );
+    await runCliCommand(`run ${flags}`, {
+        refreshAfterSuccess: true,
+        refreshScope: 'all',
+        title: `Cosecha Run Scenario: ${scenarioLabel}`,
+        workspaceFolder,
+    });
+}
+
 function buildContextualRunCommand(): string {
     const activePath = getActiveWorkspaceRelativePath();
     if (!activePath) {
@@ -1577,6 +1826,33 @@ function buildContextualPlanExplainCommand(): string {
     }
 
     return `plan explain --path ${quote(toCosechaSelector(activePath))}`;
+}
+
+async function revealTestRecord(
+    documentPath: string | undefined,
+    anchorLine?: number,
+): Promise<void> {
+    if (!documentPath) {
+        return;
+    }
+
+    const document = await vscode.workspace.openTextDocument(
+        vscode.Uri.file(documentPath),
+    );
+    const clampedLine = Math.max(
+        0,
+        Math.min(anchorLine ?? 0, Math.max(0, document.lineCount - 1)),
+    );
+    const selection = new vscode.Selection(clampedLine, 0, clampedLine, 0);
+    const editor = await vscode.window.showTextDocument(document, {
+        preview: false,
+        preserveFocus: false,
+    });
+    editor.selection = selection;
+    editor.revealRange(
+        new vscode.Range(selection.start, selection.end),
+        vscode.TextEditorRevealType.InCenter,
+    );
 }
 
 function buildCurrentFileValidationCommand(
@@ -3208,6 +3484,55 @@ async function insertGherkinDataTable(): Promise<void> {
     );
 }
 
+async function runByLabel(): Promise<void> {
+    const workspaceFolder = getPreferredWorkspaceFolder();
+    if (!workspaceFolder) {
+        void vscode.window.showWarningMessage(
+            'Abre un workspace de Cosecha para ejecutar por label.',
+        );
+        return;
+    }
+
+    try {
+        const bridge = new CosechaBridge(workspaceFolder.uri.fsPath);
+        const tests = await bridge.queryTests();
+        const labelCounts = collectSelectionLabelCounts(tests);
+        if (labelCounts.size === 0) {
+            void vscode.window.showInformationMessage(
+                'La Knowledge Base no contiene labels efectivas.',
+            );
+            return;
+        }
+
+        const selection = await vscode.window.showQuickPick(
+            Array.from(labelCounts.entries()).map(([label, count]) => ({
+                label,
+                description: `${count} test${count === 1 ? '' : 's'}`,
+            })),
+            {
+                placeHolder: 'Selecciona una label para ejecutar Cosecha',
+                matchOnDescription: true,
+            },
+        );
+        if (!selection) {
+            return;
+        }
+
+        await runCliCommand(`run --label ${quote(selection.label)}`, {
+            refreshAfterSuccess: true,
+            refreshScope: 'all',
+            title: `Cosecha Run by label: ${selection.label}`,
+            workspaceFolder,
+        });
+    } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        appendOutput(`Error loading labels: ${detail}`);
+        void vscode.window.showErrorMessage(
+            `No se pudieron cargar las labels del workspace. ${detail}`,
+        );
+    }
+}
+
 async function promptPositiveInteger(
     prompt: string,
     defaultValue: string,
@@ -3238,6 +3563,80 @@ function generateGherkinDataTable(rows: number, columns: number): string {
     ).join(' | ')} |`;
 
     return [header, ...Array.from({ length: rows }, () => row)].join('\n');
+}
+
+function findScenarioTestRecordsAtLine(
+    document: vscode.TextDocument,
+    tests: TestRecord[],
+    line: number,
+): TestRecord[] {
+    const documentLines = Array.from(
+        { length: document.lineCount },
+        (_, index) => document.lineAt(index).text,
+    );
+    for (const group of groupTestsByAnchor({
+        documentLines,
+        tests,
+    }).values()) {
+        if (group.anchorLine === line) {
+            return group.tests;
+        }
+    }
+
+    return [];
+}
+
+function describeScenarioSelection(
+    testRecords: TestRecord[],
+): string {
+    const primaryTest = testRecords[0];
+    const normalizedName = normalizeScenarioAnchorText(primaryTest?.test_name);
+    if (!normalizedName) {
+        return primaryTest?.test_name ?? primaryTest?.test_path ?? 'scenario';
+    }
+
+    return testRecords.length > 1
+        ? `${normalizedName} (${testRecords.length})`
+        : normalizedName;
+}
+
+function buildGroupedTestDescription(
+    testRecords: TestRecord[],
+    latestSessionId?: string,
+): string {
+    const primaryTest = testRecords[0];
+    const lastSessionStatus = summarizeStatusesOrUndefined(
+        testRecords
+            .map((test) => resolveLastSessionStatus(test, latestSessionId))
+            .filter(
+                (status): status is LastSessionStatus => status !== undefined,
+            ),
+    );
+
+    return [
+        primaryTest.engine_name,
+        testRecords.length > 1 ? `${testRecords.length} examples` : undefined,
+        primaryTest.source_line ? `L${primaryTest.source_line}` : undefined,
+        lastSessionStatus
+            ? `ultima sesion: ${formatStatusLabel(lastSessionStatus)}`
+            : undefined,
+    ]
+        .filter((value): value is string => Boolean(value))
+        .join(' · ');
+}
+
+function escapeMarkdownCode(value: string): string {
+    return value.replaceAll('`', '\\`');
+}
+
+function summarizeStatusesOrUndefined(
+    statuses: LastSessionStatus[],
+): LastSessionStatus | undefined {
+    if (statuses.length === 0) {
+        return undefined;
+    }
+
+    return summarizeStatuses(statuses);
 }
 
 function buildKnowledgeBaseNode(
@@ -3333,6 +3732,7 @@ function buildSnapshotCountsNode(
 }
 
 function buildCurrentFileTestsNode(
+    document: vscode.TextDocument,
     tests: TestRecord[],
     latestSessionId?: string,
     workspacePath?: string,
@@ -3341,25 +3741,58 @@ function buildCurrentFileTestsNode(
         return buildInfoNode('Sin tests indexados para el fichero activo.');
     }
 
-    const children = tests.map((test) => {
-        const node = new CosechaTreeNode(test.test_name);
-        const lastSessionStatus = resolveLastSessionStatus(test, latestSessionId);
-        node.description = buildTestDescription(test, latestSessionId);
+    const documentLines = Array.from(
+        { length: document.lineCount },
+        (_, index) => document.lineAt(index).text,
+    );
+    const children = Array.from(
+        groupTestsByAnchor({
+            documentLines,
+            tests,
+        }).values(),
+    ).map((groupedTests) => {
+        const primaryTest = groupedTests.tests[0];
+        const scenarioLabel = document.lineAt(groupedTests.anchorLine).text.trim()
+            || describeScenarioSelection(groupedTests.tests);
+        const lastSessionStatus = summarizeStatusesOrUndefined(
+            groupedTests.tests
+                .map((test) => resolveLastSessionStatus(test, latestSessionId))
+                .filter(
+                    (status): status is LastSessionStatus => status !== undefined,
+                ),
+        );
+        const node = new CosechaTreeNode(scenarioLabel);
+        node.description = buildGroupedTestDescription(
+            groupedTests.tests,
+            latestSessionId,
+        );
         node.iconPath = new vscode.ThemeIcon(
             lastSessionStatus
                 ? getThemeIconForStatus(lastSessionStatus)
                 : 'beaker',
         );
         node.command = {
-            command: 'cosecha.runTestPath',
-            title: 'Run Test Path',
-            arguments: [test.test_path, test.test_name, workspacePath],
+            command: 'cosecha.revealTestRecord',
+            title: 'Reveal Test Record',
+            arguments: [document.uri.fsPath, groupedTests.anchorLine],
         };
+        node.contextValue = 'currentFileTest';
+        node.testRecords = groupedTests.tests;
+        node.anchorLine = groupedTests.anchorLine;
+        node.documentPath = document.uri.fsPath;
+        node.workspacePath = workspacePath;
+        node.tooltip = [
+            scenarioLabel,
+            buildGroupedTestDescription(groupedTests.tests, latestSessionId),
+            primaryTest.test_path,
+        ]
+            .filter((value): value is string => Boolean(value))
+            .join('\n');
         return node;
     });
 
     const group = new CosechaTreeNode(
-        `Tests del fichero activo (${tests.length})`,
+        `Tests del fichero activo (${children.length})`,
         vscode.TreeItemCollapsibleState.Expanded,
         children,
     );

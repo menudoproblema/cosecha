@@ -125,12 +125,19 @@ def test_execute_operation_dispatches_run_and_planning_branches(
     async def _fake_run_tests(
         self,
         selection_labels,
+        node_stable_ids,
         test_limit,
         execution_plan=None,
     ):
         del self
         del execution_plan
-        run_tests_calls.append((tuple(selection_labels or ()), test_limit))
+        run_tests_calls.append(
+            (
+                tuple(selection_labels or ()),
+                tuple(node_stable_ids or ()),
+                test_limit,
+            ),
+        )
 
     async def _fake_execute_without_session(self, _operation):
         del self
@@ -156,6 +163,7 @@ def test_execute_operation_dispatches_run_and_planning_branches(
             RunOperation(
                 paths=('tests/demo',),
                 selection_labels=('fast',),
+                node_stable_ids=('stable-1',),
                 test_limit=3,
             ),
         )
@@ -171,7 +179,7 @@ def test_execute_operation_dispatches_run_and_planning_branches(
 
     asyncio.run(_run())
 
-    assert run_tests_calls == [(('fast',), 3)]
+    assert run_tests_calls == [(('fast',), ('stable-1',), 3)]
     assert recorded_paths == [
         ('tests/demo',),
         ('tests/a',),

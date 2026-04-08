@@ -9,6 +9,113 @@ export type SessionArtifactLike = {
 export type LanguageServerAction = 'skip' | 'start' | 'restart';
 export type LanguageServerAutostartPolicy = 'allowed' | 'blocked';
 export type RealpathLookup = (inputPath: string) => string | undefined;
+export type SelectionLabelCarrier = {
+    selection_labels?: string[] | readonly string[] | null;
+};
+export type AnchoredTestLike = SelectionLabelCarrier & {
+    source_line?: number | null;
+    test_name?: string | null;
+};
+export type AnchoredTestGroup<T extends AnchoredTestLike> = {
+    anchorLine: number;
+    tests: T[];
+};
+
+export function resolveCodeLensAnchorLine(options: {
+    documentLines: string[];
+    hintedSourceLine?: number | null;
+    testName?: string | null;
+}): number | undefined {
+    const { documentLines, hintedSourceLine, testName } = options;
+    const normalizedTestName = normalizeScenarioAnchorText(testName);
+
+    if (normalizedTestName) {
+        const hintedIndex = Math.max(0, (hintedSourceLine ?? 1) - 1);
+        const exactMatchNearHint = findMatchingLineIndex(
+            documentLines,
+            normalizedTestName,
+            Math.max(0, hintedIndex - 8),
+            Math.min(documentLines.length - 1, hintedIndex),
+        );
+        if (exactMatchNearHint != null) {
+            return exactMatchNearHint;
+        }
+
+        const exactMatchAnywhere = findMatchingLineIndex(
+            documentLines,
+            normalizedTestName,
+            0,
+            documentLines.length - 1,
+        );
+        if (exactMatchAnywhere != null) {
+            return exactMatchAnywhere;
+        }
+    }
+
+    if (hintedSourceLine != null && hintedSourceLine > 0) {
+        return hintedSourceLine - 1;
+    }
+
+    return undefined;
+}
+
+export function collectSelectionLabelCounts(
+    tests: SelectionLabelCarrier[],
+): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const test of tests) {
+        const labels = test.selection_labels;
+        if (!Array.isArray(labels)) {
+            continue;
+        }
+        for (const rawLabel of labels) {
+            if (typeof rawLabel !== 'string') {
+                continue;
+            }
+            const label = rawLabel.trim();
+            if (!label) {
+                continue;
+            }
+            counts.set(label, (counts.get(label) ?? 0) + 1);
+        }
+    }
+
+    return new Map(
+        Array.from(counts.entries()).sort(([left], [right]) =>
+            left.localeCompare(right),
+        ),
+    );
+}
+
+export function groupTestsByAnchor<T extends AnchoredTestLike>(options: {
+    documentLines: string[];
+    tests: T[];
+}): Map<number, AnchoredTestGroup<T>> {
+    const groups = new Map<number, AnchoredTestGroup<T>>();
+    for (const test of options.tests) {
+        const anchorLine = resolveCodeLensAnchorLine({
+            documentLines: options.documentLines,
+            hintedSourceLine: test.source_line,
+            testName: test.test_name,
+        });
+        if (anchorLine == null || anchorLine < 0) {
+            continue;
+        }
+
+        const group = groups.get(anchorLine);
+        if (group) {
+            group.tests.push(test);
+            continue;
+        }
+
+        groups.set(anchorLine, {
+            anchorLine,
+            tests: [test],
+        });
+    }
+
+    return groups;
+}
 
 export function resolveConfiguredInterpreterPath(
     configuredPath: string | undefined,
@@ -258,6 +365,32 @@ function formatStatusCountSegment(
     }
 
     return `${status} ${count}`;
+}
+
+function findMatchingLineIndex(
+    documentLines: string[],
+    expectedText: string,
+    startIndex: number,
+    endIndex: number,
+): number | undefined {
+    for (let index = startIndex; index <= endIndex; index += 1) {
+        if (documentLines[index]?.trim() === expectedText) {
+            return index;
+        }
+    }
+
+    return undefined;
+}
+
+export function normalizeScenarioAnchorText(
+    rawTestName: string | null | undefined,
+): string | undefined {
+    const trimmed = rawTestName?.trim();
+    if (!trimmed) {
+        return undefined;
+    }
+
+    return trimmed.replace(/\s+\[Example #[^\]]+\]$/, '');
 }
 
 function asRecord(

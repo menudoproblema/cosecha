@@ -139,6 +139,7 @@ def test_operation_roundtrips_cover_run_planning_and_queries(
         RunOperation(
             paths=('tests/payments',),
             selection_labels=('slow', '~legacy'),
+            node_stable_ids=('stable-1',),
             test_limit=5,
         ),
         AnalyzePlanOperation(

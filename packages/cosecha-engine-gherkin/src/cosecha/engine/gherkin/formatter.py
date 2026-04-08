@@ -140,6 +140,7 @@ class GherkinDocumentFormattingEditProvider:
         max_widths: list[int] = []
         table_start_index = 0
         prev_line: str | None = None
+        has_seen_feature = False
 
         for line_number, original_line in enumerate(document.lines):
             line_text = original_line
@@ -180,6 +181,7 @@ class GherkinDocumentFormattingEditProvider:
 
                 if clean_line.startswith('Feature:'):
                     expected_indents = 0
+                    has_seen_feature = True
                     keyword = 'Feature:'
                     keyword_len = len(keyword)
                     if (
@@ -249,7 +251,7 @@ class GherkinDocumentFormattingEditProvider:
                 ):
                     expected_indents = 2
                 elif clean_line.startswith('@'):
-                    expected_indents = 1
+                    expected_indents = 1 if has_seen_feature else 0
 
                 if in_table:
                     edits.extend(

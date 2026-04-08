@@ -29,6 +29,9 @@
     "onCommand:cosecha.rerunSessionScope",
     "onCommand:cosecha.copySessionId",
     "onCommand:cosecha.insertGherkinDataTable",
+    "onCommand:cosecha.runByLabel",
+    "onCommand:cosecha.runScenario",
+    "onCommand:cosecha.runTestPath",
     "onCommand:cosecha.refreshData",
     "onCommand:cosecha.manifestValidate",
     "onCommand:cosecha.showBackend",
@@ -102,6 +105,22 @@
       {
         "command": "cosecha.insertGherkinDataTable",
         "title": "Cosecha: Insert Gherkin Data Table"
+      },
+      {
+        "command": "cosecha.runByLabel",
+        "title": "Cosecha: Run By Label"
+      },
+      {
+        "command": "cosecha.runScenario",
+        "title": "Cosecha: Run Scenario"
+      },
+      {
+        "command": "cosecha.runTestPath",
+        "title": "Cosecha: Run File"
+      },
+      {
+        "command": "cosecha.revealTestRecord",
+        "title": "Cosecha: Reveal Scenario"
       },
       {
         "command": "cosecha.refreshData",
@@ -226,6 +245,21 @@
           "command": "cosecha.exportSessionArtifact",
           "when": "view == cosechaSessions && viewItem == sessionArtifact",
           "group": "secondary@1"
+        },
+        {
+          "command": "cosecha.revealTestRecord",
+          "when": "view == cosechaKnowledge && viewItem == currentFileTest",
+          "group": "navigation"
+        },
+        {
+          "command": "cosecha.runScenario",
+          "when": "view == cosechaKnowledge && viewItem == currentFileTest",
+          "group": "inline"
+        },
+        {
+          "command": "cosecha.runTestPath",
+          "when": "view == cosechaKnowledge && viewItem == currentFileTest",
+          "group": "inline@1"
         }
       ]
     },

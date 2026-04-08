@@ -5,6 +5,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 
 import {
+    groupTestsByAnchor,
+    collectSelectionLabelCounts,
     determineLanguageServerAction,
     determineLanguageServerAutostartPolicy,
     formatSessionStatusCounts,
@@ -12,6 +14,7 @@ import {
     normalizeLanguageServerFailureMessage,
     preferWorkspaceInterpreterShim,
     readSessionStatusCounts,
+    resolveCodeLensAnchorLine,
     resolveConfiguredInterpreterPath,
     shouldPreferWorkspaceInterpreterShim,
     selectPreferredWorkspacePath,
@@ -224,4 +227,130 @@ test('readSessionStatusCounts accepts array payloads and summary formatting is o
         formatSessionStatusCounts(counts),
         'passed 5 · failed 2 · pending 1',
     );
+});
+
+test('resolveCodeLensAnchorLine prefers the matching scenario title above the hinted line', () => {
+    const lines = [
+        '@tag',
+        'Feature: demo',
+        '',
+        '  Scenario: Executes successfully with name',
+        '    Given something',
+        '      | row |',
+    ];
+
+    assert.equal(
+        resolveCodeLensAnchorLine({
+            documentLines: lines,
+            hintedSourceLine: 6,
+            testName: 'Scenario: Executes successfully with name',
+        }),
+        3,
+    );
+});
+
+test('resolveCodeLensAnchorLine ignores example suffixes when anchoring scenario outlines', () => {
+    const lines = [
+        'Feature: demo',
+        '',
+        '  Scenario: Executes successfully',
+        '    Given one',
+        '      | <value> |',
+    ];
+
+    assert.equal(
+        resolveCodeLensAnchorLine({
+            documentLines: lines,
+            hintedSourceLine: 5,
+            testName: 'Scenario: Executes successfully [Example #2]',
+        }),
+        2,
+    );
+});
+
+test('resolveCodeLensAnchorLine falls back to the hinted source line when no title match exists', () => {
+    assert.equal(
+        resolveCodeLensAnchorLine({
+            documentLines: ['Feature: demo', '  Given something'],
+            hintedSourceLine: 2,
+            testName: 'Scenario: missing',
+        }),
+        1,
+    );
+});
+
+test('collectSelectionLabelCounts aggregates and sorts effective labels', () => {
+    const counts = collectSelectionLabelCounts([
+        { selection_labels: ['@requires:core/system', '@team:billing'] },
+        { selection_labels: ['@team:billing', '@team:critical'] },
+        { selection_labels: ['  @team:billing  ', ''] },
+    ]);
+
+    assert.deepEqual(
+        Array.from(counts.entries()),
+        [
+            ['@requires:core/system', 1],
+            ['@team:billing', 3],
+            ['@team:critical', 1],
+        ],
+    );
+});
+
+test('groupTestsByAnchor groups duplicated scenario records under one anchor', () => {
+    const groups = groupTestsByAnchor({
+        documentLines: [
+            '@tag',
+            'Feature: demo',
+            '',
+            '  Scenario: Executes successfully with name',
+            '    Given one',
+            '    Then two',
+        ],
+        tests: [
+            {
+                test_name: 'Scenario: Executes successfully with name',
+                source_line: 5,
+                selection_labels: ['@a'],
+            },
+            {
+                test_name: 'Scenario: Executes successfully with name',
+                source_line: 6,
+                selection_labels: ['@b'],
+            },
+        ],
+    });
+
+    assert.equal(groups.size, 1);
+    const firstGroup = Array.from(groups.values())[0];
+    assert.equal(firstGroup.anchorLine, 3);
+    assert.equal(firstGroup.tests.length, 2);
+});
+
+test('groupTestsByAnchor merges example variants on the same scenario anchor', () => {
+    const groups = groupTestsByAnchor({
+        documentLines: [
+            'Feature: demo',
+            '',
+            '  Scenario: Executes successfully',
+            '    Given one',
+            '      | <value> |',
+        ],
+        tests: [
+            {
+                test_name: 'Scenario: Executes successfully [Example #1]',
+                source_line: 5,
+                selection_labels: ['@a'],
+            },
+            {
+                test_name: 'Scenario: Executes successfully [Example #2]',
+                source_line: 5,
+                selection_labels: ['@b'],
+            },
+        ],
+    });
+
+    assert.equal(groups.size, 1);
+    const firstGroup = Array.from(groups.values())[0];
+    assert.equal(firstGroup.anchorLine, 2);
+    assert.equal(firstGroup.tests.length, 2);
 });

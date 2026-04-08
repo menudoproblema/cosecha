@@ -98,6 +98,7 @@ class CliSelection:
     exclude_paths: tuple[str, ...] = ()
     include_labels: tuple[str, ...] = ()
     exclude_labels: tuple[str, ...] = ()
+    node_stable_ids: tuple[str, ...] = ()
     test_limit: int | None = None
 
     def requested_paths(self) -> tuple[str, ...]:
@@ -143,6 +144,7 @@ class RunCliRequest:
         return RunOperation(
             paths=self.context.selection.requested_paths(),
             selection_labels=self.context.selection.selection_labels(),
+            node_stable_ids=self.context.selection.node_stable_ids,
             test_limit=self.context.selection.test_limit,
         )
 
@@ -1424,6 +1426,13 @@ def _register_query_render_arguments(
 
 def _register_run_arguments(parser: argparse.ArgumentParser) -> None:
     _register_label_arguments(parser)
+    parser.add_argument(
+        '--node-stable-id',
+        action='append',
+        default=[],
+        dest='node_stable_ids',
+        help='node_stable_id exacto a ejecutar. Puede repetirse',
+    )
     _register_limit_argument(parser)
 
 
@@ -1867,6 +1876,7 @@ def _build_selection(args: Namespace) -> CliSelection:
         ),
         include_labels=tuple(getattr(args, 'include_labels', ())),
         exclude_labels=tuple(getattr(args, 'exclude_labels', ())),
+        node_stable_ids=tuple(getattr(args, 'node_stable_ids', ())),
         test_limit=getattr(args, 'test_limit', None),
     )
 

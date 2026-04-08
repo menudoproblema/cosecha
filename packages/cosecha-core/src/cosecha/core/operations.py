@@ -325,6 +325,7 @@ class ResolvedDefinition:
 class RunOperation:
     paths: tuple[str, ...] = ()
     selection_labels: tuple[str, ...] = ()
+    node_stable_ids: tuple[str, ...] = ()
     test_limit: int | None = None
     operation_type: OperationType = 'run'
 

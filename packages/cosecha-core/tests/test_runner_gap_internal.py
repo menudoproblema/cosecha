@@ -1699,8 +1699,8 @@ def test_runner_control_plane_edge_paths(
     monkeypatch.setattr(
         Runner,
         'run_tests',
-        lambda self, labels, limit, execution_plan=None: called.append(
-            (tuple(labels or ()), limit),
+        lambda self, selection_labels=None, node_stable_ids=(), test_limit=None, execution_plan=None: called.append(
+            (tuple(selection_labels or ()), test_limit),
         )
         or asyncio.sleep(0),
     )
@@ -2808,3 +2808,26 @@ def test_runner_after_test_hook_failure_sets_error_for_passed_test(
     assert node.test.status is TestResultStatus.ERROR
     assert node.test.message == 'Error in after_test_run hook'
     assert node.test.failure_kind == 'hook'
+
+
+def test_runner_run_tests_filters_by_node_stable_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _EngineWithControls('engine')
+    runner = _build_runner(tmp_path, engines={'': engine})
+
+    test_1 = _SimpleTest(tmp_path / 'first.feature')
+    test_2 = _SimpleTest(tmp_path / 'second.feature')
+    node_1 = _build_node(engine, test_1, index=1)
+    node_2 = _build_node(engine, test_2, index=2)
+
+    selected_nodes = runner._select_execution_nodes(
+        (node_1, node_2),
+        skip_labels=[],
+        execute_labels=[],
+        node_stable_ids=(node_2.stable_id,),
+        test_limit=100,
+    )
+
+    assert tuple(node.stable_id for node in selected_nodes) == (node_2.stable_id,)

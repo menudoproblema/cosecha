@@ -51,11 +51,13 @@ def test_cli_selection_builds_requested_paths_and_labels() -> None:
         exclude_paths=('tests/integration',),
         include_labels=('api',),
         exclude_labels=('slow',),
+        node_stable_ids=('stable-1',),
         test_limit=5,
     )
 
     assert selection.requested_paths() == ('tests/unit', '~tests/integration')
     assert selection.selection_labels() == ('api', '~slow')
+    assert selection.node_stable_ids == ('stable-1',)
     assert selection.selected_engine_names() == {'pytest'}
 
 

@@ -125,3 +125,18 @@ def test_engine_base_paths_and_hooks(tmp_path: Path) -> None:
 
     engine.log('trace-line')
     assert trace_calls == [('trace-line',)]
+
+
+def test_engine_base_file_checks_are_safe_before_collect(
+    tmp_path: Path,
+) -> None:
+    engine = _DummyEngine(
+        'dummy',
+        collector=_Collector(),
+        reporter=DummyReporter(),
+    )
+    config = build_config(tmp_path)
+    engine.initialize(config, '')
+
+    assert engine.is_file_collected(tmp_path / 'tests' / 'example.feature') is False
+    assert engine.is_file_failed(tmp_path / 'tests' / 'failed.feature') is False

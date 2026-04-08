@@ -115,3 +115,22 @@ def test_provide_document_formatting_edits_flushes_trailing_table_and_outline_sp
     assert '\nScenario Outline:Y' in edit_texts
     assert '      | a | b |' in edit_texts
     assert '      | 1 | 2 |' in edit_texts
+
+
+def test_provide_document_formatting_edits_keeps_feature_tags_at_root_level() -> None:
+    provider = GherkinDocumentFormattingEditProvider()
+    document = PlainTextDocument(
+        uri='file:///tags.feature',
+        source=(
+            '  @system @mongodb\n'
+            ' @requires:core/system\n'
+            'Feature: Demo\n'
+        ),
+    )
+
+    edits = provider.provide_document_formatting_edits(document)
+    edited_lines = {edit.range.start.line: edit.new_text for edit in edits}
+
+    assert edited_lines[0] == '@system @mongodb'
+    assert edited_lines[1] == '@requires:core/system'
+    assert 2 not in edited_lines

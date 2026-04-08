@@ -2314,6 +2314,7 @@ class Runner:
     async def run_tests(  # noqa: PLR0915
         self,
         selection_labels: list[str] | None = None,
+        node_stable_ids: tuple[str, ...] = (),
         test_limit: int | None = None,
         execution_plan: tuple[TestExecutionNode, ...] | None = None,
     ):
@@ -2349,6 +2350,7 @@ class Runner:
             resolved_execution_plan,
             skip_labels=skip_labels,
             execute_labels=execute_labels,
+            node_stable_ids=node_stable_ids,
             test_limit=test_limit,
         )
         selected_analysis = self._filter_planning_analysis(
@@ -3013,12 +3015,14 @@ class Runner:
         *,
         skip_labels: list[str],
         execute_labels: list[str],
+        node_stable_ids: tuple[str, ...] = (),
         test_limit: int,
     ) -> tuple[TestExecutionNode, ...]:
         return filter_execution_nodes(
             execution_plan,
             skip_labels=skip_labels,
             execute_labels=execute_labels,
+            node_stable_ids=node_stable_ids,
             test_limit=test_limit,
         )
 
@@ -3659,6 +3663,7 @@ class Runner:
             async def _run_operation() -> OperationResult:
                 await self.run_tests(
                     list(operation.selection_labels) or None,
+                    operation.node_stable_ids,
                     operation.test_limit,
                 )
                 return RunOperationResult(
@@ -4227,11 +4232,13 @@ class Runner:
         self,
         execution_plan: tuple[TestExecutionNode, ...],
         selection_labels: list[str] | None = None,
+        node_stable_ids: tuple[str, ...] = (),
         test_limit: int | None = None,
     ) -> None:
         await self.run_tests(
-            selection_labels,
-            test_limit,
+            selection_labels=selection_labels,
+            node_stable_ids=node_stable_ids,
+            test_limit=test_limit,
             execution_plan=validate_execution_plan(execution_plan),
         )
 

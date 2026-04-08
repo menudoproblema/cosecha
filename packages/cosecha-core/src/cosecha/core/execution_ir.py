@@ -338,12 +338,17 @@ def filter_execution_nodes(
     *,
     skip_labels: list[str],
     execute_labels: list[str],
+    node_stable_ids: tuple[str, ...] = (),
     test_limit: int,
 ) -> tuple[TestExecutionNode, ...]:
     selected_nodes: list[TestExecutionNode] = []
+    selected_stable_ids = set(node_stable_ids)
     for node in execution_plan:
         if len(selected_nodes) >= test_limit:
             break
+
+        if selected_stable_ids and node.stable_id not in selected_stable_ids:
+            continue
 
         test = node.test
         if any(
