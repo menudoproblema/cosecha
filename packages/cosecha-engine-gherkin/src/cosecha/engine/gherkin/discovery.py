@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import sys
 
+from contextlib import suppress
 from pathlib import Path
 
 from cosecha.core.console_rendering import (
@@ -29,10 +31,41 @@ from cosecha.engine.gherkin.reporting import (
     gherkin_scenario_name,
     gherkin_step_result_reports,
 )
+from cosecha.engine.gherkin.utils import (
+    get_step_definitions_from_module,
+    import_step_modules,
+)
 
 
 class GherkinEngineDescriptor:
     engine_type = 'gherkin'
+
+    @classmethod
+    def validate_engine_spec(
+        cls,
+        engine_spec,
+        *,
+        manifest,
+    ) -> None:
+        del cls
+        if engine_spec.registry_loaders or not engine_spec.step_library_modules:
+            return
+
+        modules_with_layout_steps = _discover_layout_step_modules(
+            engine_spec.step_library_modules,
+            root_path=manifest.manifest_dir,
+        )
+        if not modules_with_layout_steps:
+            return
+
+        modules_text = ', '.join(modules_with_layout_steps)
+        msg = (
+            f'Gherkin engine {engine_spec.id!r} defines steps with '
+            f'layouts in step_library_modules ({modules_text}) but '
+            'registry_layouts = []. Define at least one '
+            '[[engines.registry_loaders]] entry with layouts.'
+        )
+        raise ManifestValidationError(msg)
 
     @classmethod
     def validate_resource_binding(
@@ -262,6 +295,50 @@ class GherkinConsolePresenter:
                 detail_counts.get(f'steps.{step_result.status.value}', 0)
                 + 1
             )
+
+
+def _discover_layout_step_modules(
+    step_library_modules: tuple[str, ...],
+    *,
+    root_path: Path,
+) -> tuple[str, ...]:
+    modules_with_layout_steps: set[str] = set()
+    resolved_root = str(root_path.resolve())
+    path_inserted = False
+    if resolved_root not in sys.path:
+        sys.path.insert(0, resolved_root)
+        path_inserted = True
+    try:
+        for module_spec in step_library_modules:
+            try:
+                modules = import_step_modules(module_spec)
+            except Exception as exc:  # pragma: no cover
+                msg = (
+                    'Unable to inspect gherkin step_library_module '
+                    f'{module_spec!r}: {exc}'
+                )
+                raise ManifestValidationError(msg) from exc
+
+            for module in modules:
+                if _module_uses_layout_steps(module):
+                    modules_with_layout_steps.add(module.__name__)
+    finally:
+        if path_inserted:
+            if sys.path and sys.path[0] == resolved_root:
+                sys.path.pop(0)
+            else:
+                with suppress(ValueError):
+                    sys.path.remove(resolved_root)
+
+    return tuple(sorted(modules_with_layout_steps))
+
+
+def _module_uses_layout_steps(module) -> bool:
+    for step_definition in get_step_definitions_from_module(module):
+        for step_text in step_definition.step_text_list:
+            if step_text.layouts:
+                return True
+    return False
 
 
 def _import_gherkin_completion():

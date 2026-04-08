@@ -69,6 +69,118 @@ def test_validate_resource_binding_requires_layout_and_alias() -> None:
     )
 
 
+def test_validate_engine_spec_rejects_layout_steps_without_registry_loaders(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module_path = tmp_path / 'demo_layout_steps.py'
+    module_path.write_text(
+        '\n'.join(
+            (
+                'from cosecha.engine.gherkin.steps import given',
+                (
+                    'from cosecha.engine.gherkin.steps.definition import '
+                    'LayoutRef, StepText'
+                ),
+                '',
+                (
+                    "@given(StepText('a user {name}', "
+                    "layouts=LayoutRef('users', 'name')))"
+                ),
+                'def step_user(name):',
+                '    return name',
+            ),
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    engine_spec = EngineSpec(
+        id='gherkin',
+        type='gherkin',
+        name='gherkin',
+        path='features',
+        step_library_modules=('demo_layout_steps',),
+    )
+    manifest = SimpleNamespace(manifest_dir=tmp_path)
+
+    with pytest.raises(
+        ManifestValidationError,
+        match=r'registry_layouts = \[\]',
+    ):
+        GherkinEngineDescriptor.validate_engine_spec(
+            engine_spec,
+            manifest=manifest,
+        )
+
+
+def test_validate_engine_spec_accepts_layout_steps_when_registry_loaders_are_declared(
+    tmp_path,
+) -> None:
+    engine_spec = EngineSpec(
+        id='gherkin',
+        type='gherkin',
+        name='gherkin',
+        path='features',
+        step_library_modules=('module_does_not_need_import',),
+        registry_loaders=(
+            RegistryLoaderSpec(
+                layouts=(
+                    RegistryLayoutSpec(
+                        name='users',
+                        base=SymbolRef(module='builtins', qualname='object'),
+                        module_globs=('demo.users',),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    assert (
+        GherkinEngineDescriptor.validate_engine_spec(
+            engine_spec,
+            manifest=SimpleNamespace(manifest_dir=tmp_path),
+        )
+        is None
+    )
+
+
+def test_validate_engine_spec_accepts_modules_without_layout_steps(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module_path = tmp_path / 'demo_plain_steps.py'
+    module_path.write_text(
+        '\n'.join(
+            (
+                'from cosecha.engine.gherkin.steps import given',
+                '',
+                "@given('a user exists')",
+                'def step_user():',
+                '    return None',
+            ),
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    engine_spec = EngineSpec(
+        id='gherkin',
+        type='gherkin',
+        name='gherkin',
+        path='features',
+        step_library_modules=('demo_plain_steps',),
+    )
+
+    assert (
+        GherkinEngineDescriptor.validate_engine_spec(
+            engine_spec,
+            manifest=SimpleNamespace(manifest_dir=tmp_path),
+        )
+        is None
+    )
+
+
 def test_materialize_builds_gherkin_engine_with_resolved_bindings_and_paths(
     tmp_path,
     monkeypatch,
