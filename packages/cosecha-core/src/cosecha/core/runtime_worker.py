@@ -12,6 +12,8 @@ from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
 
+from collections.abc import Iterable
+
 from cosecha.core.capture import CapturedLogContext, CaptureLogHandler
 from cosecha.core.config import Config
 from cosecha.core.domain_event_stream import (
@@ -64,6 +66,14 @@ from cosecha.core.serialization import (
     encode_json_bytes,
     encode_json_text,
 )
+from cosecha.core.shadow import (
+    EphemeralArtifactCapability,
+    binding_shadow,
+    build_ephemeral_artifact_capability,
+    build_ephemeral_capability_registry,
+    component_id_from_component_type,
+)
+from cosecha.core.shadow_execution import shadow_execution_context_from_env
 from cosecha.core.utils import setup_engines
 
 
@@ -71,6 +81,51 @@ _CONTROL_STDOUT = sys.stdout
 _RUNTIME_STATE_DIR = Path('.cosecha/runtime')
 _ROOT_LOGGER = logging.getLogger()
 WORKER_HEARTBEAT_INTERVAL_SECONDS = 5.0
+
+
+def _build_worker_ephemeral_capabilities(
+    components: Iterable[object],
+) -> dict[str, object]:
+    capabilities = []
+    for component in components:
+        describe_capabilities = getattr(component, 'describe_capabilities', None)
+        if not callable(describe_capabilities):
+            continue
+        try:
+            component_id = component_id_from_component_type(type(component))
+        except Exception:
+            continue
+        capability = build_ephemeral_artifact_capability(
+            tuple(describe_capabilities()),
+            declared_component_id=component_id,
+        )
+        if capability is None:
+            continue
+        capabilities.append(capability)
+    return build_ephemeral_capability_registry(tuple(capabilities))
+
+
+@contextlib.contextmanager
+def _binding_worker_shadow(
+    components: Iterable[object] = (),
+    *,
+    granted_capabilities: Iterable[EphemeralArtifactCapability] | None = None,
+):
+    shadow = shadow_execution_context_from_env()
+    if shadow is None:
+        yield
+        return
+    shadow.materialize()
+    registry = (
+        build_ephemeral_capability_registry(tuple(granted_capabilities))
+        if granted_capabilities is not None
+        else _build_worker_ephemeral_capabilities(components)
+    )
+    with binding_shadow(
+        shadow,
+        ephemeral_capabilities=registry,
+    ):
+        yield
 
 
 def _resolve_worker_state_root(root_path: Path) -> Path:
@@ -268,25 +323,26 @@ async def _run_worker(
     config = Config.from_snapshot(request.config_snapshot)
     hooks, engines = setup_engines(config)
     del hooks
-    engine_path, engine = _find_engine(engines, request.node.engine_name)
-    engine.initialize(config, engine_path)
+    with _binding_worker_shadow(engines.values()):
+        engine_path, engine = _find_engine(engines, request.node.engine_name)
+        engine.initialize(config, engine_path)
 
-    test_path = config.root_path / request.node.test_path
-    await engine.collect(test_path)
-    await engine.start_session()
-    try:
-        node = _find_execution_node(engine, config.root_path, request)
-        resource_manager = ResourceManager(
-            legacy_session_scope='worker',
-            unsupported_scopes=('run',),
-        )
-        result = await execute_test_body(
-            node,
-            resource_manager,
-            ExecutionBodyOptions(root_path=config.root_path),
-        )
-    finally:
-        await engine.finish_session()
+        test_path = config.root_path / request.node.test_path
+        await engine.collect(test_path)
+        await engine.start_session()
+        try:
+            node = _find_execution_node(engine, config.root_path, request)
+            resource_manager = ResourceManager(
+                legacy_session_scope='worker',
+                unsupported_scopes=('run',),
+            )
+            result = await execute_test_body(
+                node,
+                resource_manager,
+                ExecutionBodyOptions(root_path=config.root_path),
+            )
+        finally:
+            await engine.finish_session()
 
     response_payload = {
         'phase_durations': result.phase_durations,
@@ -320,6 +376,7 @@ class _PersistentWorkerSession:
         '_stream_response_sink',
         '_streamed_event_ids',
         '_worker_state_sink',
+        '_worker_shadow_binding',
         'config',
         'engines',
         'resource_manager',
@@ -361,6 +418,7 @@ class _PersistentWorkerSession:
             self._current_response_metadata,
             self._streamed_event_ids,
         )
+        self._worker_shadow_binding = None
         self._worker_state_sink = _WorkerStateRegistrySink(
             _resolve_worker_state_root(root_path)
             / f'worker-{worker_id}.json',
@@ -422,6 +480,7 @@ class _PersistentWorkerSession:
         self._prepared_nodes_by_id.clear()
         self._prepared_nodes_by_stable_id.clear()
         self._apply_config_snapshot(bootstrap.config_snapshot)
+        self._rebind_worker_shadow(bootstrap.ephemeral_capabilities)
 
         nodes_by_engine: dict[str, list[TestExecutionNodeSnapshot]] = (
             defaultdict(list)
@@ -609,6 +668,7 @@ class _PersistentWorkerSession:
             await self._flush_pending_log_events()
         finally:
             self._active_response_metadata = None
+            self._unbind_worker_shadow()
             resource_timings = tuple(
                 self.resource_manager.build_resource_timing_snapshot(),
             )
@@ -878,6 +938,22 @@ class _PersistentWorkerSession:
             return
 
         prime_execution_node(snapshot)
+
+    def _rebind_worker_shadow(
+        self,
+        granted_capabilities: tuple[EphemeralArtifactCapability, ...],
+    ) -> None:
+        self._unbind_worker_shadow()
+        self._worker_shadow_binding = _binding_worker_shadow(
+            granted_capabilities=granted_capabilities,
+        )
+        self._worker_shadow_binding.__enter__()
+
+    def _unbind_worker_shadow(self) -> None:
+        if self._worker_shadow_binding is None:
+            return
+        self._worker_shadow_binding.__exit__(None, None, None)
+        self._worker_shadow_binding = None
 
 
 async def _run_persistent_worker(

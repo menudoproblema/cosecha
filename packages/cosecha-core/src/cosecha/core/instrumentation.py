@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Sequence
     from pathlib import Path
 
+    from cosecha.core.capabilities import CapabilityDescriptor
     from cosecha.core.session_artifacts import InstrumentationSummary
 
 
@@ -15,8 +16,10 @@ COSECHA_COVERAGE_ACTIVE_ENV = 'COSECHA_COVERAGE_ACTIVE'
 COSECHA_INSTRUMENTATION_METADATA_FILE_ENV = (
     'COSECHA_INSTRUMENTATION_METADATA_FILE'
 )
+COSECHA_KNOWLEDGE_STORAGE_ROOT_ENV = 'COSECHA_KNOWLEDGE_STORAGE_ROOT'
 COSECHA_RUNTIME_STATE_DIR_ENV = 'COSECHA_RUNTIME_STATE_DIR'
 COSECHA_SHADOW_ROOT_ENV = 'COSECHA_SHADOW_ROOT'
+type InstrumentationStability = Literal['stable', 'experimental']
 
 
 @dataclass(slots=True, frozen=True)
@@ -71,3 +74,19 @@ class ExecutionInstrumenter(Protocol):
         instrumentation data it could persist.
         """
         ...
+
+
+class InstrumentationComponent(ExecutionInstrumenter, Protocol):
+    """Public contract for instrumentation packages published by Cosecha."""
+
+    @classmethod
+    def instrumentation_name(cls) -> str: ...
+
+    @classmethod
+    def instrumentation_api_version(cls) -> int: ...
+
+    @classmethod
+    def instrumentation_stability(cls) -> InstrumentationStability: ...
+
+    @classmethod
+    def describe_capabilities(cls) -> tuple[CapabilityDescriptor, ...]: ...

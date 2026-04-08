@@ -23,3 +23,19 @@ Reglas:
 - consola, JUnit, JSON y tooling comparten la misma base de hechos,
 - baja el acoplamiento entre ejecución y presentación,
 - el sistema necesita una taxonomía de eventos estable.
+
+## Nota de evolucion
+
+ADR-0007 amplia esta decision para observabilidad live. La lectura
+vigente es:
+
+- el tipado obligatorio aplica al envelope y a la taxonomia de eventos
+  del dominio;
+- los payloads pueden seguir siendo extensibles y parcialmente opacos
+  cuando la evolucion del runtime lo requiera;
+- reporting, telemetria y live observability comparten la misma base de
+  hechos, aunque no todos los canales usen el mismo grado de
+  estructuracion interna.
+
+ADR-0014 formaliza esta politica como distincion explicita entre
+envelopes tipados y payloads extensibles.

@@ -61,6 +61,12 @@ from cosecha.core.scheduler import (
     assign_group_slots,
 )
 from cosecha.core.serialization import decode_json_dict, encode_json_bytes
+from cosecha.core.shadow import (
+    binding_shadow,
+    build_ephemeral_artifact_capability,
+    component_id_from_component_type,
+    strip_shadow_environment,
+)
 from cosecha.core.shadow_execution import (
     ShadowExecutionContext,
     resolve_shadow_execution_context,
@@ -111,6 +117,17 @@ class RuntimeProvider(ABC):
 
     def initialize(self, config: Config) -> None:
         del config
+
+    def bind_execution_context(
+        self,
+        execution_context: ExecutionContext,
+        *,
+        shadow_managed_externally: bool = False,
+    ) -> None:
+        del execution_context, shadow_managed_externally
+
+    def should_preserve_shadow_context(self) -> bool:
+        return False
 
     async def start(self) -> None: ...  # noqa: B027
 
@@ -588,8 +605,8 @@ class _PersistentWorker:
     ) -> _PersistentWorker:
         process = await asyncio.create_subprocess_exec(
             python_executable,
-            '-m',
-            'cosecha.core.runtime_worker',
+            '-c',
+            _build_runtime_worker_bootstrap_code(),
             '--persistent',
             '--worker-id',
             str(worker_id),
@@ -640,12 +657,14 @@ class _PersistentWorker:
         self,
         nodes,
         *,
+        ephemeral_capabilities=(),
         resource_materialization_snapshots=(),
     ) -> None:
         response = await self._send_command(
             RuntimeBootstrapCommand(
                 bootstrap=ExecutionBootstrap.from_nodes(
                     nodes,
+                    ephemeral_capabilities=ephemeral_capabilities,
                     resource_materialization_snapshots=(
                         resource_materialization_snapshots
                     ),
@@ -899,6 +918,8 @@ class ProcessRuntimeProvider(RuntimeProvider):
         '_run_resource_manager',
         '_runtime_state_dir',
         '_session_id',
+        '_shadow_managed_externally',
+        '_shadow_binding',
         '_shadow_context',
         '_worker_count',
         '_worker_selection_policy',
@@ -939,6 +960,8 @@ class ProcessRuntimeProvider(RuntimeProvider):
         self._runtime_state_dir: Path | None = None
         self._execution_context: ExecutionContext | None = None
         self._shadow_context: ShadowExecutionContext | None = None
+        self._shadow_managed_externally = False
+        self._shadow_binding = None
         self._run_resource_manager = ResourceManager()
         self._orphaned_resources = _OrphanedResourceManager()
 
@@ -1112,6 +1135,20 @@ class ProcessRuntimeProvider(RuntimeProvider):
         if self._worker_count is None:
             self._worker_count = max(1, config.concurrency)
 
+    def bind_execution_context(
+        self,
+        execution_context: ExecutionContext,
+        *,
+        shadow_managed_externally: bool = False,
+    ) -> None:
+        self._execution_context = execution_context
+        self._shadow_managed_externally = shadow_managed_externally
+        if self._config is not None:
+            self._config.execution_context = execution_context
+
+    def should_preserve_shadow_context(self) -> bool:
+        return self._preserve_shadow_context
+
     async def start(self) -> None:
         if self._cwd is None or self._root_path is None:
             msg = 'ProcessRuntimeProvider.initialize() must run before start()'
@@ -1136,21 +1173,33 @@ class ProcessRuntimeProvider(RuntimeProvider):
         self._preserve_shadow_context = False
         self._config.execution_context = self._execution_context
         self._runtime_state_dir = self._shadow_context.runtime_state_dir
+        if not self._shadow_managed_externally:
+            self._shadow_binding = binding_shadow(
+                self._shadow_context,
+                ephemeral_capabilities={},
+            )
+            self._shadow_binding.__enter__()
 
         worker_ids = tuple(range(max(1, self._worker_count or 1)))
-        workers = await asyncio.gather(
-            *(
-                _PersistentWorker.start(
-                    worker_id,
-                    python_executable=self.python_executable,
-                    cwd=self._cwd,
-                    root_path=self._root_path,
-                    session_id=self._session_id,
-                    shadow_context=self._shadow_context,
-                )
-                for worker_id in worker_ids
-            ),
-        )
+        try:
+            workers = await asyncio.gather(
+                *(
+                    _PersistentWorker.start(
+                        worker_id,
+                        python_executable=self.python_executable,
+                        cwd=self._cwd,
+                        root_path=self._root_path,
+                        session_id=self._session_id,
+                        shadow_context=self._shadow_context,
+                    )
+                    for worker_id in worker_ids
+                ),
+            )
+        except Exception:
+            if self._shadow_binding is not None:
+                self._shadow_binding.__exit__(*sys.exc_info())
+                self._shadow_binding = None
+            raise
         for worker_id, worker in zip(worker_ids, workers, strict=True):
             self._workers.append(worker)
             self._domain_events.append(
@@ -1200,6 +1249,11 @@ class ProcessRuntimeProvider(RuntimeProvider):
             *(
                 worker.bootstrap(
                     compiled_plan,
+                    ephemeral_capabilities=(
+                        _collect_worker_ephemeral_capabilities(
+                            compiled_plan,
+                        )
+                    ),
                     resource_materialization_snapshots=(
                         materialization_snapshots
                     ),
@@ -1301,11 +1355,20 @@ class ProcessRuntimeProvider(RuntimeProvider):
             )
             self._run_resource_manager = ResourceManager()
             self._session_id = None
-            if self._shadow_context is not None:
+            if self._shadow_binding is not None:
+                self._shadow_binding.__exit__(None, None, None)
+                self._shadow_binding = None
+            if (
+                self._shadow_context is not None
+                and not self._shadow_managed_externally
+            ):
                 self._shadow_context.cleanup(
                     preserve=self._preserve_shadow_context,
                 )
                 self._shadow_context = None
+            elif self._shadow_managed_externally:
+                self._shadow_context = None
+            self._shadow_managed_externally = False
             return
 
         self._resource_timings.clear()
@@ -1344,11 +1407,20 @@ class ProcessRuntimeProvider(RuntimeProvider):
         )
         self._run_resource_manager = ResourceManager()
         self._run_materialization_snapshots = ()
-        if self._shadow_context is not None:
+        if self._shadow_binding is not None:
+            self._shadow_binding.__exit__(None, None, None)
+            self._shadow_binding = None
+        if (
+            self._shadow_context is not None
+            and not self._shadow_managed_externally
+        ):
             self._shadow_context.cleanup(
                 preserve=self._preserve_shadow_context,
             )
             self._shadow_context = None
+        elif self._shadow_managed_externally:
+            self._shadow_context = None
+        self._shadow_managed_externally = False
         self._session_id = None
 
     def take_resource_timings(self):
@@ -1427,6 +1499,11 @@ class ProcessRuntimeProvider(RuntimeProvider):
         if self._bootstrap_plan:
             await recovered_worker.bootstrap(
                 self._bootstrap_plan,
+                ephemeral_capabilities=(
+                    _collect_worker_ephemeral_capabilities(
+                        self._bootstrap_plan,
+                    )
+                ),
                 resource_materialization_snapshots=(
                     self._run_materialization_snapshots
                 ),
@@ -1585,7 +1662,16 @@ class ProcessRuntimeProvider(RuntimeProvider):
         if self._runtime_state_dir is None or self._session_id is None:
             return None
 
-        return self._runtime_state_dir / f'worker-{worker_id}.json'
+        state_file = f'worker-{worker_id}.json'
+        session_scoped_path = (
+            self._runtime_state_dir
+            / self._session_id
+            / state_file
+        )
+        if session_scoped_path.exists():
+            return session_scoped_path
+
+        return self._runtime_state_dir / state_file
 
     def _delete_worker_state(
         self,
@@ -1609,17 +1695,46 @@ def _build_worker_env(
     *,
     shadow_context: ShadowExecutionContext | None = None,
 ) -> dict[str, str]:
-    env = os.environ.copy()
-    src_path = Path(__file__).resolve().parents[2]
-    current_pythonpath = env.get('PYTHONPATH')
-    env['PYTHONPATH'] = (
-        f'{src_path}{os.pathsep}{current_pythonpath}'
-        if current_pythonpath
-        else str(src_path)
+    env = strip_shadow_environment(os.environ.copy())
+    pythonpath_entries = [
+        path
+        for path in sys.path
+        if isinstance(path, str) and path
+    ]
+    env['PYTHONPATH'] = os.pathsep.join(
+        dict.fromkeys(pythonpath_entries),
     )
     if shadow_context is not None:
         env.update(shadow_context.env())
     return env
+
+
+def _build_runtime_worker_bootstrap_code() -> str:
+    return '\n'.join(
+        (
+            'import os',
+            'import runpy',
+            'import sys',
+            'from pathlib import Path',
+            '',
+            'trusted_roots = {',
+            '    str(Path(entry).resolve())',
+            "    for entry in os.environ.get('PYTHONPATH', '').split(os.pathsep)",
+            '    if entry',
+            '}',
+            'sanitized = []',
+            'for entry in sys.path:',
+            '    resolved = str(Path(entry or os.curdir).resolve())',
+            "    if entry in {'', '.'} or resolved in trusted_roots:",
+            '        sanitized.append(entry)',
+            '        continue',
+            "    if (Path(resolved) / 'cosecha' / '__init__.py').exists():",
+            '        continue',
+            '    sanitized.append(entry)',
+            'sys.path[:] = sanitized',
+            "runpy.run_module('cosecha.core.runtime_worker', run_name='__main__')",
+        ),
+    )
 
 
 def _build_bootstrap_correlation_id(
@@ -1723,6 +1838,26 @@ def _compile_bootstrap_plan(
 ) -> tuple[TestExecutionNode, ...]:
     del root_path
     return plan
+
+
+def _collect_worker_ephemeral_capabilities(
+    nodes: tuple[TestExecutionNode, ...],
+):
+    capabilities_by_component = {}
+    for node in nodes:
+        engine = node.engine
+        try:
+            component_id = component_id_from_component_type(type(engine))
+        except Exception:
+            continue
+        capability = build_ephemeral_artifact_capability(
+            engine.describe_capabilities(),
+            declared_component_id=component_id,
+        )
+        if capability is None:
+            continue
+        capabilities_by_component[component_id] = capability
+    return tuple(capabilities_by_component.values())
 
 
 def _collect_run_scoped_requirements(

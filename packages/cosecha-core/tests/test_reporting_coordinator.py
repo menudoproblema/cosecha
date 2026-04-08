@@ -37,6 +37,38 @@ class _TelemetryAwareReporter(Reporter):
         assert self.telemetry_stream is not None
 
 
+class _PlainReporter(Reporter):
+    __slots__ = ('add_test_calls', 'add_test_result_calls', 'start_calls', 'print_calls')
+
+    @classmethod
+    def reporter_name(cls) -> str:
+        return 'plain'
+
+    @classmethod
+    def reporter_output_kind(cls) -> str:
+        return 'structured'
+
+    def __init__(self) -> None:
+        self.add_test_calls = 0
+        self.add_test_result_calls = 0
+        self.start_calls = 0
+        self.print_calls = 0
+
+    async def start(self):
+        self.start_calls += 1
+
+    async def add_test(self, test):
+        del test
+        self.add_test_calls += 1
+
+    async def add_test_result(self, test):
+        del test
+        self.add_test_result_calls += 1
+
+    async def print_report(self):
+        self.print_calls += 1
+
+
 @pytest.mark.asyncio
 async def test_bind_telemetry_stream_reaches_wrapped_extra_reporters(
     tmp_path,
@@ -84,3 +116,28 @@ async def test_rebinds_engine_reporters_initialized_before_telemetry(
     assert [span.name for span in sink.spans] == [
         'reporter.print_report',
     ]
+
+
+@pytest.mark.asyncio
+async def test_reporting_coordinator_without_telemetry_uses_plain_calls(
+    tmp_path,
+) -> None:
+    config = Config(root_path=tmp_path)
+    reporter = _PlainReporter()
+    reporter.initialize(config)
+    engine = SimpleNamespace(reporter=reporter)
+    coordinator = ReportingCoordinator((reporter,))
+
+    coordinator.initialize_engine_reporter(config, engine)
+    await coordinator.start_extra_reporters()
+    await coordinator.start_engine_reporter(engine)
+    await coordinator.record_engine_test_start(engine, test=object())
+    await coordinator.record_engine_test_result(engine, report_subject=object())
+    await coordinator.record_extra_test_result(report_subject=object())
+    await coordinator.finish_engine_reporter(engine)
+    await coordinator.finish_extra_reporters()
+
+    assert reporter.start_calls == 2
+    assert reporter.add_test_calls == 1
+    assert reporter.add_test_result_calls == 2
+    assert reporter.print_calls == 2

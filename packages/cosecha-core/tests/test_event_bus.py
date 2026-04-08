@@ -75,3 +75,51 @@ async def test_async_event_bus_applies_queue_backpressure() -> None:
     release_consumer.set()
     await asyncio.wait_for(publish_task, 1.0)
     await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_async_event_bus_rejects_publish_before_start() -> None:
+    async def consume(_event: str) -> None:
+        return None
+
+    bus = AsyncEventBus(consume)
+
+    with pytest.raises(
+        RuntimeError,
+        match='AsyncEventBus.start\\(\\) must run before publishing events',
+    ):
+        await bus.publish('one')
+
+
+@pytest.mark.asyncio
+async def test_async_event_bus_close_without_start_is_noop() -> None:
+    async def consume(_event: str) -> None:
+        return None
+
+    bus = AsyncEventBus(consume)
+
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_async_event_bus_consume_returns_when_queue_is_missing() -> None:
+    async def consume(_event: str) -> None:
+        return None
+
+    bus = AsyncEventBus(consume)
+
+    await bus._consume()
+
+
+@pytest.mark.asyncio
+async def test_async_event_bus_start_resets_first_error() -> None:
+    async def consume(_event: str) -> None:
+        return None
+
+    bus = AsyncEventBus(consume)
+    bus._first_error = RuntimeError('previous')
+
+    await bus.start()
+
+    assert bus._first_error is None
+    await bus.close()

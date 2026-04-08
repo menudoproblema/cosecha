@@ -18,6 +18,7 @@ from cosecha.core.runtime_interop import validate_runtime_interface_name
 DISCOVERY_RELOAD_MIN_CALLS = 8
 CORE_MANIFEST_SIZE_LIMIT_BYTES = 40000
 BROKEN_MODULE_NAME = 'boom'
+CORE_SRC_ROOT = Path(__file__).resolve().parents[1] / 'src' / 'cosecha' / 'core'
 
 
 def test_workspace_discovery_registers_engines_catalogs_and_hooks() -> None:
@@ -58,9 +59,11 @@ def test_discovery_raises_when_an_entry_point_cannot_be_loaded(
     monkeypatch.setattr(
         discovery,
         'entry_points',
-        lambda *, group: (BrokenEntryPoint(),)
-        if group == discovery.ENGINE_ENTRYPOINT_GROUP
-        else (),
+        lambda *, group: (
+            (BrokenEntryPoint(),)
+            if group == discovery.ENGINE_ENTRYPOINT_GROUP
+            else ()
+        ),
     )
     discovery.clear_discovery_registry()
 
@@ -133,10 +136,11 @@ def test_clearing_discovery_registry_invalidates_entry_point_cache(
         discovery.clear_discovery_registry()
 
 
-def test_core_manifest_no_longer_contains_hardcoded_engine_or_hook_branches(
-) -> None:
+def test_core_manifest_no_longer_contains_hardcoded_engine_or_hook_branches() -> (
+    None
+):
     manifest_path = Path(
-        'packages/cosecha-core/src/cosecha/core/cosecha_manifest.py',
+        CORE_SRC_ROOT / 'cosecha_manifest.py',
     )
     source = manifest_path.read_text(encoding='utf-8')
 
@@ -152,13 +156,13 @@ def test_core_reporting_ir_exposes_only_generic_test_report() -> None:
 
 def test_core_manifest_is_split_into_loader_and_validation_modules() -> None:
     manifest_path = Path(
-        'packages/cosecha-core/src/cosecha/core/cosecha_manifest.py',
+        CORE_SRC_ROOT / 'cosecha_manifest.py',
     )
     loader_path = Path(
-        'packages/cosecha-core/src/cosecha/core/manifest_loader.py',
+        CORE_SRC_ROOT / 'manifest_loader.py',
     )
     validation_path = Path(
-        'packages/cosecha-core/src/cosecha/core/manifest_validation.py',
+        CORE_SRC_ROOT / 'manifest_validation.py',
     )
 
     assert loader_path.exists()

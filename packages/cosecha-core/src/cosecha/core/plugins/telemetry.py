@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, override
 
+from cosecha.core.capabilities import (
+    CapabilityAttribute,
+    CapabilityDescriptor,
+)
 from cosecha.core.plugins.base import Plugin
 from cosecha.core.telemetry import JsonlTelemetrySink
 
@@ -41,6 +45,21 @@ class TelemetryPlugin(Plugin):
     async def initialize(self, context: PluginContext) -> None:
         await super().initialize(context)
         context.telemetry_stream.add_sink(self._sink)
+
+    @override
+    def describe_capabilities(self) -> tuple[CapabilityDescriptor, ...]:
+        return (
+            CapabilityDescriptor(
+                name='telemetry_export',
+                level='supported',
+                attributes=(
+                    CapabilityAttribute(
+                        name='output_formats',
+                        value=('jsonl',),
+                    ),
+                ),
+            ),
+        )
 
     @override
     async def start(self) -> None:

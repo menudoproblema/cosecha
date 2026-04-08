@@ -96,6 +96,7 @@ se invalide, se vacíe o no exista.
 ## Documentos relacionados
 
 - [Qué es un engine](./engines.md)
+- [Catalogo canonico CXP de Cosecha](./architecture/canonical_catalog.md)
 - [Modelo de configuración](./architecture/configuration_model.md)
 - [Flujos end-to-end](./architecture/end_to_end_flows.md)
 - [Modelo de errores](./architecture/error_model.md)

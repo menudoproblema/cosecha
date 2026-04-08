@@ -10,7 +10,7 @@ requires-python = ">=3.13"
 dependencies = [
     "cosecha-workspace",
     "cosecha-workspace-python",
-    "cxp==2.0.0",
+    "cxp>=3.0.0",
     "msgspec==0.20.0",
 ]
 

@@ -12,6 +12,7 @@ from cosecha.core.resources import (
     validate_resource_requirements,
 )
 from cosecha.core.serialization import from_builtins_dict, to_builtins_dict
+from cosecha.core.shadow import EphemeralArtifactCapability
 
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -30,7 +31,7 @@ if TYPE_CHECKING:  # pragma: no cover
 type PlanningMode = Literal['strict', 'relaxed']
 type PlanningIssueSeverity = Literal['error', 'warning']
 
-EXECUTION_IR_SCHEMA_VERSION = 1
+EXECUTION_IR_SCHEMA_VERSION = 2
 
 
 @dataclass(slots=True, frozen=True)
@@ -264,6 +265,9 @@ class ExecutionBootstrap:
     nodes: tuple[TestExecutionNodeSnapshot, ...]
     workspace: dict[str, object] | None = None
     execution_context: dict[str, object] | None = None
+    ephemeral_capabilities: tuple[EphemeralArtifactCapability, ...] = field(
+        default_factory=tuple,
+    )
     resource_materialization_snapshots: tuple[
         ResourceMaterializationSnapshot,
         ...,
@@ -281,6 +285,7 @@ class ExecutionBootstrap:
         cls,
         nodes: Iterable[TestExecutionNode],
         *,
+        ephemeral_capabilities: tuple[EphemeralArtifactCapability, ...] = (),
         resource_materialization_snapshots: tuple[
             ResourceMaterializationSnapshot,
             ...,
@@ -303,6 +308,7 @@ class ExecutionBootstrap:
                 if node_tuple[0].engine.config.execution_context is None
                 else node_tuple[0].engine.config.execution_context.to_dict()
             ),
+            ephemeral_capabilities=ephemeral_capabilities,
             nodes=tuple(node.snapshot for node in node_tuple),
             resource_materialization_snapshots=(
                 resource_materialization_snapshots

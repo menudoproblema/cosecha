@@ -23,22 +23,36 @@ type CapabilitySupportLevel = Literal[
     'accepted_noop',
     'unsupported',
 ]
-type CapabilityComponentKind = Literal['engine', 'plugin', 'runtime']
+type CapabilityComponentKind = Literal[
+    'engine',
+    'reporter',
+    'plugin',
+    'runtime',
+    'instrumentation',
+]
 type CapabilityAttributeValue = str | bool | int | float | tuple[str, ...]
 type CapabilityStability = Literal['stable', 'experimental']
 
 CAPABILITY_API_VERSION = 1
 
 CAPABILITY_DRAFT_VALIDATION = 'draft_validation'
+CAPABILITY_ARTIFACT_OUTPUT = 'artifact_output'
+CAPABILITY_HUMAN_OUTPUT = 'human_output'
 CAPABILITY_LIVE_EXECUTION_OBSERVABILITY = 'live_execution_observability'
 CAPABILITY_LIBRARY_DEFINITION_KNOWLEDGE = 'library_definition_knowledge'
 CAPABILITY_PLAN_EXPLANATION = 'plan_explanation'
+CAPABILITY_PRODUCES_EPHEMERAL_ARTIFACTS = (
+    'produces_ephemeral_artifacts'
+)
 CAPABILITY_PROJECT_DEFINITION_KNOWLEDGE = 'project_definition_knowledge'
 CAPABILITY_PROJECT_REGISTRY_KNOWLEDGE = 'project_registry_knowledge'
+CAPABILITY_REPORT_LIFECYCLE = 'report_lifecycle'
+CAPABILITY_RESULT_PROJECTION = 'result_projection'
 CAPABILITY_SELECTION_LABELS = 'selection_labels'
 CAPABILITY_STATIC_PROJECT_DEFINITION_DISCOVERY = (
     'static_project_definition_discovery'
 )
+CAPABILITY_STRUCTURED_OUTPUT = 'structured_output'
 CAPABILITY_LAZY_PROJECT_DEFINITION_LOADING = 'lazy_project_definition_loading'
 
 

@@ -32,6 +32,7 @@ from cosecha.core.cosecha_manifest import (
     parse_cosecha_manifest_text,
 )
 from cosecha.core.discovery import (
+    iter_instrumentation_types,
     iter_console_presenter_contributions,
     iter_shell_reporting_contributions,
 )
@@ -78,11 +79,13 @@ from cosecha.core.execution_runtime import (
 from cosecha.core.extensions import (
     ExtensionComponentSnapshot,
     build_engine_extension_snapshot,
+    build_instrumentation_extension_snapshot,
     build_plugin_extension_snapshot,
     build_reporter_extension_snapshot,
     build_runtime_extension_snapshot,
 )
 from cosecha.core.items import (
+    FailureKind,
     ExecutionPredicateEvaluation,
     TestResultStatus,
     resolve_failure_kind,
@@ -144,6 +147,13 @@ from cosecha.core.reporter import NullReporter, QueuedReporter, Reporter
 from cosecha.core.reporting_coordinator import ReportingCoordinator
 from cosecha.core.reporting_ir import ensure_test_report, reconcile_test_report
 from cosecha.core.resources import ResourceManager, normalize_resource_scope
+from cosecha.core.shadow import (
+    binding_shadow,
+    build_ephemeral_artifact_capability,
+    build_ephemeral_capability_registry,
+    component_id_from_component_type,
+)
+from cosecha.core.shadow_execution import resolve_shadow_execution_context
 from cosecha.core.runtime import (
     LocalRuntimeProvider,
     RuntimeInfrastructureError,
@@ -169,6 +179,7 @@ from cosecha.core.session_artifacts import (
 from cosecha.core.session_timing import SessionTiming, TestTiming
 from cosecha.core.telemetry import TelemetryStream
 from cosecha.core.utils import is_subpath, validate_plugin_class
+from cosecha.workspace import ExecutionContext
 
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -229,6 +240,9 @@ class Runner:
     __slots__ = (
         '_before_session_hooks_ran',
         '_capture_log_active',
+        '_controller_ephemeral_capabilities',
+        '_controller_shadow_binding',
+        '_controller_shadow_context',
         '_domain_event_node_stable_ids',
         '_domain_event_session_id',
         '_domain_event_stream',
@@ -246,8 +260,10 @@ class Runner:
         '_runtime_provider',
         '_scheduler',
         '_session_artifact_metadata_writer',
+        '_session_run_aborted',
         '_session_live_engine_snapshots',
         '_session_report_state',
+        '_stop_on_error_triggered',
         '_started_engines',
         '_started_plugins',
         'config',
@@ -309,6 +325,9 @@ class Runner:
         # Guardamos si hemos activado la captura para restaurarla solo cuando
         # esta sesion haya llegado a modificar el logger global.
         self._capture_log_active = False
+        self._controller_shadow_binding = None
+        self._controller_shadow_context = None
+        self._controller_ephemeral_capabilities = {}
         # Conservamos los handlers originales del root logger para dejarlos tal
         # y como estaban al terminar la sesion.
         self._root_logger_handlers: tuple[logging.Handler, ...] = ()
@@ -331,10 +350,12 @@ class Runner:
         self._live_update_version = 0
         self._latest_plan_explanation = None
         self._pending_live_log_event_tasks: set[asyncio.Task[None]] = set()
+        self._session_run_aborted = False
         self._session_live_engine_snapshots: dict[
             tuple[str, str, str],
             LiveEngineSnapshotSummary,
         ] = {}
+        self._stop_on_error_triggered = False
         self._domain_event_stream.add_sink(
             KnowledgeBaseDomainEventSink(self._knowledge_base),
         )
@@ -452,6 +473,14 @@ class Runner:
                 component_kind='runtime',
                 descriptors=self._runtime_provider.describe_capabilities(),
             ),
+            *(
+                build_component_capability_snapshot(
+                    component_name=instrumentation_type.instrumentation_name(),
+                    component_kind='instrumentation',
+                    descriptors=instrumentation_type.describe_capabilities(),
+                )
+                for instrumentation_type in iter_instrumentation_types()
+            ),
         )
 
     def describe_system_extensions(
@@ -491,6 +520,13 @@ class Runner:
             build_runtime_extension_snapshot(
                 self._runtime_provider,
                 descriptors=self._runtime_provider.describe_capabilities(),
+            ),
+            *(
+                build_instrumentation_extension_snapshot(
+                    instrumentation_type,
+                    descriptors=instrumentation_type.describe_capabilities(),
+                )
+                for instrumentation_type in iter_instrumentation_types()
             ),
             *(reporter_snapshots[key] for key in sorted(reporter_snapshots)),
         )
@@ -1260,6 +1296,7 @@ class Runner:
             ):
                 self.session_timing.run_end = time.perf_counter()
         except BaseException as error:
+            self._session_run_aborted = True
             run_error = error
             raise
         else:
@@ -1739,8 +1776,9 @@ class Runner:
             # Activamos la captura solo cuando ya vamos a arrancar la sesion.
             self._start_log_capture()
 
-        await self._reporting_coordinator.start_extra_reporters()
         self._reset_session_observability()
+        self._bind_controller_shadow()
+        await self._reporting_coordinator.start_extra_reporters()
         await self._runtime_provider.start()
         await self._start_plugins()
 
@@ -1970,6 +2008,24 @@ class Runner:
             st.shutdown_end = time.perf_counter()
             st.session_end = st.shutdown_end
 
+        preserve_shadow = (
+            self._session_run_aborted
+            or first_error is not None
+            or self._runtime_provider.should_preserve_shadow_context()
+        )
+        if preserve_shadow:
+            self._reconcile_unfinished_collected_tests(
+                status=TestResultStatus.ERROR,
+                message='Session terminated before test execution completed',
+                failure_kind='runtime',
+                error_code='session_aborted',
+            )
+        elif self._stop_on_error_triggered:
+            self._reconcile_unfinished_collected_tests(
+                status=TestResultStatus.SKIPPED,
+                message='Execution stopped after a previous failure',
+            )
+
         await self.telemetry_stream.flush()
         await self._domain_event_stream.emit(
             SessionFinishedEvent(
@@ -1997,6 +2053,10 @@ class Runner:
             ):
                 await plugin.after_session_closed()
 
+        self._unbind_controller_shadow(
+            preserve=preserve_shadow,
+        )
+
         phase_start = time.perf_counter()
         try:
             await self.telemetry_stream.close()
@@ -2016,10 +2076,136 @@ class Runner:
         self._started_engines.clear()
         self._started_plugins.clear()
         self._before_session_hooks_ran = False
+        self._session_run_aborted = False
+        self._stop_on_error_triggered = False
 
         # Propagamos el primer error de limpieza una vez hecho el best effort.
         if first_error is not None:
             raise first_error
+
+    def _reconcile_unfinished_collected_tests(
+        self,
+        *,
+        status: TestResultStatus,
+        message: str,
+        failure_kind: FailureKind | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        for engine in self.engines:
+            for test in engine.get_collected_tests():
+                if test.status != TestResultStatus.PENDING:
+                    continue
+                test.status = status
+                if test.message is None:
+                    test.message = message
+                if status != TestResultStatus.ERROR:
+                    continue
+                if test.failure_kind is None:
+                    test.failure_kind = failure_kind
+                if test.error_code is None:
+                    test.error_code = error_code
+
+    def _bind_controller_shadow(self) -> None:
+        if self._controller_shadow_binding is not None:
+            return
+
+        execution_context = self.config.execution_context
+        if execution_context is None:
+            execution_context = ExecutionContext(
+                execution_root=self.config.execution_root_path,
+                knowledge_storage_root=self.config.knowledge_storage_root_path,
+                invocation_id=self._domain_event_session_id,
+                workspace_fingerprint=(
+                    None
+                    if self.config.workspace is None
+                    else self.config.workspace.fingerprint
+                ),
+            )
+        updated_execution_context, shadow_context = (
+            resolve_shadow_execution_context(
+                execution_context,
+                session_id=self._domain_event_session_id,
+            )
+        )
+        self.config.execution_context = updated_execution_context
+        self._runtime_provider.bind_execution_context(
+            updated_execution_context,
+            shadow_managed_externally=True,
+        )
+        self._controller_shadow_context = shadow_context
+        self._controller_ephemeral_capabilities = (
+            build_ephemeral_capability_registry(
+                tuple(self._iter_active_ephemeral_capabilities()),
+            )
+        )
+        self._controller_shadow_binding = binding_shadow(
+            shadow_context,
+            ephemeral_capabilities=self._controller_ephemeral_capabilities,
+        )
+        self._controller_shadow_binding.__enter__()
+
+    def _unbind_controller_shadow(self, *, preserve: bool) -> None:
+        if self._controller_shadow_binding is not None:
+            self._controller_shadow_binding.__exit__(None, None, None)
+            self._controller_shadow_binding = None
+        if self._controller_shadow_context is not None:
+            self._controller_shadow_context.cleanup(
+                preserve=preserve,
+                session_succeeded=not preserve,
+                capabilities=self._controller_ephemeral_capabilities,
+            )
+            self._controller_shadow_context = None
+        self._controller_ephemeral_capabilities = {}
+
+    def _iter_active_ephemeral_capabilities(self):
+        for engine in self.engines:
+            capability = self._ephemeral_capability_from_component(
+                type(engine),
+                engine.describe_capabilities(),
+            )
+            if capability is not None:
+                yield capability
+
+        runtime_capability = self._ephemeral_capability_from_component(
+            type(self._runtime_provider),
+            self._runtime_provider.describe_capabilities(),
+        )
+        if runtime_capability is not None:
+            yield runtime_capability
+
+        for plugin in self.plugins:
+            capability = self._ephemeral_capability_from_component(
+                type(plugin),
+                plugin.describe_capabilities(),
+            )
+            if capability is not None:
+                yield capability
+
+        for reporter in (
+            *(engine.reporter for engine in self.engines),
+            *self._extra_reporters,
+        ):
+            descriptor_target = reporter.descriptor_target()
+            capability = self._ephemeral_capability_from_component(
+                type(descriptor_target),
+                descriptor_target.describe_capabilities(),
+            )
+            if capability is not None:
+                yield capability
+
+    def _ephemeral_capability_from_component(
+        self,
+        component_type: type[object],
+        descriptors,
+    ):
+        try:
+            component_id = component_id_from_component_type(component_type)
+        except Exception:
+            return None
+        return build_ephemeral_artifact_capability(
+            descriptors,
+            declared_component_id=component_id,
+        )
 
     async def build_execution_plan_analysis(
         self,
@@ -2649,6 +2835,7 @@ class Runner:
 
             if test.has_failed and self.config.stop_on_error:
                 stop_execution = True
+                self._stop_on_error_triggered = True
 
         async def _worker(worker_slot: int) -> None:
             while True:

@@ -308,6 +308,9 @@ Cadena de autoridad:
    `execution_root = workspace.workspace_root`,
    `knowledge_storage_root = workspace.workspace_root / ".cosecha"`.
    Vive en `cosecha-workspace`, no en runtime.
+   `.cosecha` es, por tanto, el storage operativo por defecto consumido
+   por shadow execution y preservacion de artefactos en ADR-0008 y
+   ADR-0009.
 2. **Runtime profile**: puede sustituir cualquiera de los dos. Es el
    lugar natural para que un perfil "supervisor" declare un shadow
    execution context apuntando a un directorio temporal.

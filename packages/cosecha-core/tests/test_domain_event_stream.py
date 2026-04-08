@@ -136,3 +136,52 @@ def test_domain_event_stream_close_closes_sinks_and_ignores_future_emits(
 
     assert sink.closed is True
     assert sink.events == []
+
+
+def test_domain_event_stream_close_is_idempotent() -> None:
+    stream = DomainEventStream()
+    sink = RecordingSink()
+    stream.add_sink(sink)
+
+    asyncio.run(stream.close())
+    asyncio.run(stream.close())
+
+    assert sink.closed is True
+
+
+def test_domain_event_stream_close_cancels_peer_sinks_on_failure() -> None:
+    stream = DomainEventStream()
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    class BlockingCloseSink(DomainEventSink):
+        async def emit(self, event) -> None:
+            del event
+
+        async def close(self) -> None:
+            entered.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    class FailingCloseSink(DomainEventSink):
+        async def emit(self, event) -> None:
+            del event
+
+        async def close(self) -> None:
+            msg = 'close boom'
+            raise RuntimeError(msg)
+
+    stream.add_sink(BlockingCloseSink())
+    stream.add_sink(FailingCloseSink())
+
+    async def _run() -> None:
+        task = asyncio.create_task(stream.close())
+        await asyncio.wait_for(entered.wait(), 1.0)
+        with pytest.raises(RuntimeError, match='close boom'):
+            await task
+
+    asyncio.run(_run())
+    assert cancelled.is_set()

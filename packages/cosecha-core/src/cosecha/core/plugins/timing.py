@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, override
 
+from cosecha.core.capabilities import (
+    CapabilityAttribute,
+    CapabilityDescriptor,
+)
 from cosecha.core.plugins.base import Plugin
 
 
@@ -36,6 +40,21 @@ class TimingPlugin(Plugin):
         if not args.timing:
             return None
         return cls()
+
+    @override
+    def describe_capabilities(self) -> tuple[CapabilityDescriptor, ...]:
+        return (
+            CapabilityDescriptor(
+                name='timing_summary',
+                level='supported',
+                attributes=(
+                    CapabilityAttribute(
+                        name='output_formats',
+                        value=('console_summary',),
+                    ),
+                ),
+            ),
+        )
 
     @override
     async def start(self): ...

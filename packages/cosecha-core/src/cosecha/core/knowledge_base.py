@@ -907,28 +907,6 @@ class ResourceKnowledgeQuery:
             limit=_cast_optional_int(data.get('limit')),
         )
 
-
-def _cast_optional_str(value: object) -> str | None:
-    if value is None:
-        return None
-
-    return str(value)
-
-
-def _cast_optional_int(value: object) -> int | None:
-    if value is None:
-        return None
-
-    return int(value)
-
-
-def _cast_optional_float(value: object) -> float | None:
-    if value is None:
-        return None
-
-    return float(value)
-
-
 class KnowledgeReader(Protocol):
     def snapshot(self) -> KnowledgeSnapshot: ...
 
@@ -1393,6 +1371,10 @@ class InMemoryKnowledgeBase:
         if self._session is None:
             return
 
+        self._reconcile_finished_session(
+            session_id=event.metadata.session_id or self._session.session_id,
+            finished_at=event.timestamp,
+        )
         self._session = SessionKnowledge(
             root_path=self._session.root_path,
             workspace_fingerprint=self._session.workspace_fingerprint,
@@ -1403,6 +1385,107 @@ class InMemoryKnowledgeBase:
             finished_at=event.timestamp,
             has_failures=event.has_failures,
         )
+
+    def _reconcile_finished_session(
+        self,
+        *,
+        session_id: str | None,
+        finished_at: float,
+    ) -> None:
+        for node_stable_id, active_test in tuple(self._active_tests.items()):
+            previous = self._tests.get(node_stable_id)
+            if (
+                previous is not None
+                and session_id is not None
+                and previous.session_id not in {None, session_id}
+            ):
+                continue
+            self._active_tests.pop(node_stable_id, None)
+            self._live_current_steps.pop(node_stable_id, None)
+            self._live_engine_snapshots.pop(node_stable_id, None)
+            if previous is None:
+                continue
+            self._tests[node_stable_id] = TestKnowledge(
+                node_id=previous.node_id or active_test.node_id,
+                node_stable_id=node_stable_id,
+                engine_name=previous.engine_name or active_test.engine_name,
+                test_name=previous.test_name or active_test.test_name,
+                test_path=previous.test_path,
+                correlation_id=previous.correlation_id,
+                session_id=previous.session_id or session_id,
+                plan_id=previous.plan_id,
+                trace_id=previous.trace_id,
+                started_at=(
+                    active_test.started_at
+                    if active_test.started_at is not None
+                    else previous.started_at
+                ),
+                finished_at=finished_at,
+                status='error',
+                duration=previous.duration,
+                selection_labels=previous.selection_labels,
+                source_line=previous.source_line,
+                discovery_mode=previous.discovery_mode,
+                knowledge_version=previous.knowledge_version,
+                content_hash=previous.content_hash,
+                indexed_at=previous.indexed_at,
+                invalidated_at=previous.invalidated_at,
+                invalidation_reason=previous.invalidation_reason,
+                worker_slot=(
+                    active_test.worker_slot
+                    if active_test.worker_slot is not None
+                    else previous.worker_slot
+                ),
+                scheduled_at=previous.scheduled_at,
+                max_attempts=previous.max_attempts,
+                timeout_seconds=previous.timeout_seconds,
+                retry_count=previous.retry_count,
+                failure_kind=previous.failure_kind or 'runtime',
+                last_error_code=previous.last_error_code or 'session_aborted',
+            )
+
+        for node_stable_id, previous in tuple(self._tests.items()):
+            if previous.finished_at is not None:
+                continue
+            if session_id is not None and previous.session_id not in {
+                None,
+                session_id,
+            }:
+                continue
+            if previous.scheduled_at is None and previous.started_at is None:
+                continue
+            self._live_current_steps.pop(node_stable_id, None)
+            self._live_engine_snapshots.pop(node_stable_id, None)
+            self._tests[node_stable_id] = TestKnowledge(
+                node_id=previous.node_id,
+                node_stable_id=node_stable_id,
+                engine_name=previous.engine_name,
+                test_name=previous.test_name,
+                test_path=previous.test_path,
+                correlation_id=previous.correlation_id,
+                session_id=previous.session_id or session_id,
+                plan_id=previous.plan_id,
+                trace_id=previous.trace_id,
+                started_at=previous.started_at,
+                finished_at=finished_at,
+                status='error',
+                duration=previous.duration,
+                selection_labels=previous.selection_labels,
+                source_line=previous.source_line,
+                discovery_mode=previous.discovery_mode,
+                knowledge_version=previous.knowledge_version,
+                content_hash=previous.content_hash,
+                indexed_at=previous.indexed_at,
+                invalidated_at=previous.invalidated_at,
+                invalidation_reason=previous.invalidation_reason,
+                worker_slot=previous.worker_slot,
+                scheduled_at=previous.scheduled_at,
+                max_attempts=previous.max_attempts,
+                timeout_seconds=previous.timeout_seconds,
+                retry_count=previous.retry_count,
+                failure_kind=previous.failure_kind or 'runtime',
+                last_error_code=previous.last_error_code or 'session_aborted',
+            )
 
     def _apply_plan_event(
         self,

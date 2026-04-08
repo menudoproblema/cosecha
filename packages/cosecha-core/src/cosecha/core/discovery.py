@@ -21,6 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover
     )
     from cosecha.core.engines.base import Engine
     from cosecha.core.hooks import Hook
+    from cosecha.core.instrumentation import InstrumentationComponent
     from cosecha.core.plugins.base import Plugin
     from cosecha.core.resources import ResourceRequirement
 
@@ -28,6 +29,7 @@ if TYPE_CHECKING:  # pragma: no cover
 ENGINE_ENTRYPOINT_GROUP = 'cosecha.engines'
 HOOK_ENTRYPOINT_GROUP = 'cosecha.hooks'
 PLUGIN_ENTRYPOINT_GROUP = 'cosecha.plugins'
+INSTRUMENTATION_ENTRYPOINT_GROUP = 'cosecha.instrumentation'
 SHELL_LSP_ENTRYPOINT_GROUP = 'cosecha.shell.lsp'
 SHELL_CLI_ENTRYPOINT_GROUP = 'cosecha.shell.cli'
 SHELL_REPORTING_ENTRYPOINT_GROUP = 'cosecha.shell.reporting'
@@ -132,6 +134,7 @@ class DiscoveryRegistry:
         '_definition_query_providers',
         '_engine_descriptors',
         '_hook_descriptors',
+        '_instrumentation_types',
         '_loaded',
         '_lock',
         '_plugin_types',
@@ -147,6 +150,10 @@ class DiscoveryRegistry:
             type[DefinitionKnowledgeQueryProvider],
         ] = {}
         self._hook_descriptors: dict[str, type[HookDescriptor]] = {}
+        self._instrumentation_types: dict[
+            str,
+            type[InstrumentationComponent],
+        ] = {}
         self._plugin_types: dict[str, type[Plugin]] = {}
         self._shell_lsp_contributions: dict[
             str,
@@ -172,6 +179,7 @@ class DiscoveryRegistry:
             self._engine_descriptors.clear()
             self._definition_query_providers.clear()
             self._hook_descriptors.clear()
+            self._instrumentation_types.clear()
             self._plugin_types.clear()
             self._shell_lsp_contributions.clear()
             self._shell_cli_contributions.clear()
@@ -203,6 +211,15 @@ class DiscoveryRegistry:
         plugin_type: type[Plugin],
     ) -> None:
         self._plugin_types[plugin_name] = plugin_type
+
+    def register_instrumentation_type(
+        self,
+        instrumentation_name: str,
+        instrumentation_type: type[InstrumentationComponent],
+    ) -> None:
+        self._instrumentation_types[instrumentation_name] = (
+            instrumentation_type
+        )
 
     def register_shell_lsp_contribution(
         self,
@@ -255,6 +272,7 @@ class DiscoveryRegistry:
                 self.register_hook_descriptor,
             )
             self._load_plugin_group()
+            self._load_instrumentation_group()
             self._load_group(
                 SHELL_LSP_ENTRYPOINT_GROUP,
                 self.register_shell_lsp_contribution,
@@ -308,6 +326,29 @@ class DiscoveryRegistry:
             if plugin_type is not None:
                 self.register_plugin_type(entry_point.name, plugin_type)
 
+    def _load_instrumentation_group(self) -> None:
+        for entry_point in _iter_group_entry_points(
+            INSTRUMENTATION_ENTRYPOINT_GROUP,
+        ):
+            try:
+                instrumentation_type = entry_point.load()
+            except Exception as error:
+                msg = (
+                    'Failed to load instrumentation entry point '
+                    f'{entry_point.name!r} from group '
+                    f'{INSTRUMENTATION_ENTRYPOINT_GROUP!r}'
+                )
+                raise DiscoveryLoadError(
+                    group=INSTRUMENTATION_ENTRYPOINT_GROUP,
+                    entry_point_name=entry_point.name,
+                    message=msg,
+                ) from error
+            if instrumentation_type is not None:
+                self.register_instrumentation_type(
+                    entry_point.name,
+                    instrumentation_type,
+                )
+
     def iter_engine_descriptors(self) -> tuple[type[EngineDescriptor], ...]:
         self.ensure_loaded()
         return tuple(self._engine_descriptors.values())
@@ -340,6 +381,12 @@ class DiscoveryRegistry:
     def iter_plugin_types(self) -> tuple[type[Plugin], ...]:
         self.ensure_loaded()
         return tuple(self._plugin_types.values())
+
+    def iter_instrumentation_types(
+        self,
+    ) -> tuple[type[InstrumentationComponent], ...]:
+        self.ensure_loaded()
+        return tuple(self._instrumentation_types.values())
 
     def iter_shell_lsp_contributions(
         self,
@@ -433,6 +480,16 @@ def register_plugin_type(
     )
 
 
+def register_instrumentation_type(
+    instrumentation_name: str,
+    instrumentation_type: type[InstrumentationComponent],
+) -> None:
+    get_current_discovery_registry().register_instrumentation_type(
+        instrumentation_name,
+        instrumentation_type,
+    )
+
+
 def register_shell_lsp_contribution(
     contribution: type[ShellContribution],
 ) -> None:
@@ -495,6 +552,11 @@ def get_hook_descriptor(
 
 def iter_plugin_types() -> tuple[type[Plugin], ...]:
     return get_current_discovery_registry().iter_plugin_types()
+
+
+def iter_instrumentation_types(
+) -> tuple[type[InstrumentationComponent], ...]:
+    return get_current_discovery_registry().iter_instrumentation_types()
 
 
 def iter_shell_lsp_contributions() -> tuple[type[ShellContribution], ...]:

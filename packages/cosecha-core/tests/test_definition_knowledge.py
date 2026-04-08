@@ -51,3 +51,23 @@ def test_gherkin_payload_rejects_unsupported_versions() -> None:
         match='Unsupported gherkin definition payload version',
     ):
         get_gherkin_payload(incompatible)
+
+
+def test_definition_knowledge_record_roundtrip() -> None:
+    record = DefinitionKnowledgeRecord(
+        source_line=10,
+        function_name='step_impl',
+        category='step',
+        provider_kind='python',
+        provider_name='gherkin',
+        runtime_required=True,
+        runtime_reason='dynamic import',
+        declaration_origin='module',
+        discovery_mode='runtime',
+        documentation='doc',
+        payload_kind='gherkin',
+        payload_version=1,
+        payload={'patterns': ['a step']},
+    )
+
+    assert DefinitionKnowledgeRecord.from_dict(record.to_dict()) == record

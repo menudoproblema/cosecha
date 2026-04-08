@@ -2,24 +2,29 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from cosecha.core.capabilities import CAPABILITY_PRODUCES_EPHEMERAL_ARTIFACTS
 from cxp import (
-    COSECHA_ENGINE_INTERFACE,
-    COSECHA_PLUGIN_INTERFACE,
-    COSECHA_REPORTER_INTERFACE,
     CapabilityDescriptor as CxpCapabilityDescriptor,
     CapabilityOperationBinding as CxpCapabilityOperationBinding,
     ComponentCapabilitySnapshot as CxpComponentCapabilitySnapshot,
     ComponentIdentity,
 )
+from cxp.catalogs.interfaces.cosecha import (
+    COSECHA_ENGINE_INTERFACE,
+    COSECHA_INSTRUMENTATION_INTERFACE,
+    COSECHA_PLUGIN_INTERFACE,
+    COSECHA_REPORTER_INTERFACE,
+    COSECHA_RUNTIME_INTERFACE,
+)
 
 
 if TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Iterable
-
     from cosecha.core.capabilities import CapabilityDescriptor
     from cosecha.core.engines.base import Engine
+    from cosecha.core.instrumentation import InstrumentationComponent
     from cosecha.core.plugins.base import Plugin
     from cosecha.core.reporter import Reporter
+    from cosecha.core.runtime import RuntimeProvider
 
 
 _PROJECT_DEFINITION_KNOWLEDGE = 'project_definition_knowledge'
@@ -59,14 +64,6 @@ def build_cxp_engine_component_snapshot(
 
     selection_labels = _find_descriptor(descriptors, 'selection_labels')
     if selection_labels is not None:
-        label_sources = tuple(
-            str(item)
-            for item in _attribute_value(
-                selection_labels,
-                'label_sources',
-                (),
-            )
-        )
         cxp_descriptors.append(
             CxpCapabilityDescriptor(
                 name='selection_labels',
@@ -75,13 +72,20 @@ def build_cxp_engine_component_snapshot(
                 operations=_filtered_cxp_operations(
                     selection_labels.operations,
                     {
+                        'run',
                         'plan.analyze',
                         'plan.explain',
                         'plan.simulate',
                     },
                 ),
                 metadata={
-                    'label_sources': list(label_sources),
+                    'label_sources': list(
+                        _attribute_value(
+                            selection_labels,
+                            'label_sources',
+                            (),
+                        ),
+                    ),
                     'supports_glob_matching': bool(
                         _attribute_value(
                             selection_labels,
@@ -104,6 +108,54 @@ def build_cxp_engine_component_snapshot(
             ),
         )
 
+    project_knowledge = _find_descriptor(
+        descriptors,
+        _PROJECT_DEFINITION_KNOWLEDGE,
+    )
+    if project_knowledge is not None:
+        cxp_descriptors.append(
+            _build_definition_descriptor(
+                descriptor=project_knowledge,
+                name='project_definition_knowledge',
+                origin_kind='project',
+                default_scopes=('project',),
+                allowed_operations={
+                    'definition.resolve',
+                    'knowledge.query_tests',
+                    'knowledge.query_definitions',
+                },
+            ),
+        )
+
+    library_knowledge = _find_descriptor(
+        descriptors,
+        _LIBRARY_DEFINITION_KNOWLEDGE,
+    )
+    if library_knowledge is not None:
+        cxp_descriptors.append(
+            _build_definition_descriptor(
+                descriptor=library_knowledge,
+                name='library_definition_knowledge',
+                origin_kind='library',
+                default_scopes=('library',),
+                allowed_operations={
+                    'definition.resolve',
+                    'knowledge.query_definitions',
+                },
+            ),
+        )
+
+    registry_knowledge = _find_descriptor(
+        descriptors,
+        _PROJECT_REGISTRY_KNOWLEDGE,
+    )
+    if registry_knowledge is not None:
+        cxp_descriptors.append(
+            _build_registry_descriptor(
+                descriptor=registry_knowledge,
+            ),
+        )
+
     plan_explanation = _find_descriptor(descriptors, 'plan_explanation')
     if plan_explanation is not None:
         cxp_descriptors.append(
@@ -120,18 +172,23 @@ def build_cxp_engine_component_snapshot(
         _STATIC_PROJECT_DEFINITION_DISCOVERY,
     )
     if static_discovery is not None:
-        backend = _attribute_value(
-            static_discovery,
-            'discovery_backend',
-            'collector',
-        )
         cxp_descriptors.append(
             CxpCapabilityDescriptor(
                 name='static_definition_discovery',
                 level=static_discovery.level,
                 summary=static_discovery.summary,
                 operations=_cxp_operations(static_discovery.operations),
-                metadata={'discovery_backends': [str(backend)]},
+                metadata={
+                    'discovery_backends': [
+                        str(
+                            _attribute_value(
+                                static_discovery,
+                                'discovery_backend',
+                                'collector',
+                            ),
+                        ),
+                    ],
+                },
             ),
         )
 
@@ -140,11 +197,6 @@ def build_cxp_engine_component_snapshot(
         _LAZY_PROJECT_DEFINITION_LOADING,
     )
     if lazy_materialization is not None:
-        granularity = _attribute_value(
-            lazy_materialization,
-            'materialization_granularity',
-            'file',
-        )
         cxp_descriptors.append(
             CxpCapabilityDescriptor(
                 name='on_demand_definition_materialization',
@@ -154,23 +206,25 @@ def build_cxp_engine_component_snapshot(
                     CxpCapabilityOperationBinding('definition.resolve'),
                 ),
                 metadata={
-                    'materialization_granularities': [str(granularity)],
+                    'materialization_granularities': [
+                        str(
+                            _attribute_value(
+                                lazy_materialization,
+                                'materialization_granularity',
+                                'file',
+                            ),
+                        ),
+                    ],
                 },
             ),
         )
-
-    definition_knowledge = _build_definition_knowledge_descriptor(descriptors)
-    if definition_knowledge is not None:
-        cxp_descriptors.append(definition_knowledge)
 
     if dependency_rules:
         cxp_descriptors.append(
             CxpCapabilityDescriptor(
                 name='engine_dependency_knowledge',
                 level='supported',
-                summary=(
-                    'Cross-engine dependency rules published by the engine.'
-                ),
+                summary='Cross-engine dependency rules published by the engine.',
                 operations=(
                     CxpCapabilityOperationBinding(
                         'dependencies.describe',
@@ -192,66 +246,55 @@ def build_cxp_engine_component_snapshot(
     )
 
 
+def build_cxp_runtime_component_snapshot(
+    runtime_provider: RuntimeProvider,
+) -> CxpComponentCapabilitySnapshot:
+    return CxpComponentCapabilitySnapshot(
+        component_name=runtime_provider.runtime_name(),
+        component_kind='runtime',
+        identity=ComponentIdentity(
+            interface=COSECHA_RUNTIME_INTERFACE,
+            provider=runtime_provider.runtime_name(),
+            version=str(runtime_provider.runtime_api_version()),
+        ),
+        capabilities=_passthrough_cxp_capabilities(
+            runtime_provider.describe_capabilities(),
+        ),
+    )
+
+
+def build_cxp_instrumentation_component_snapshot(
+    instrumentation_type: type[InstrumentationComponent],
+) -> CxpComponentCapabilitySnapshot:
+    return CxpComponentCapabilitySnapshot(
+        component_name=instrumentation_type.instrumentation_name(),
+        component_kind='instrumentation',
+        identity=ComponentIdentity(
+            interface=COSECHA_INSTRUMENTATION_INTERFACE,
+            provider=instrumentation_type.instrumentation_name(),
+            version=str(instrumentation_type.instrumentation_api_version()),
+        ),
+        capabilities=_passthrough_cxp_capabilities(
+            instrumentation_type.describe_capabilities(),
+            excluded_names={CAPABILITY_PRODUCES_EPHEMERAL_ARTIFACTS},
+        ),
+    )
+
+
 def build_cxp_reporter_component_snapshot(
     reporter: Reporter,
 ) -> CxpComponentCapabilitySnapshot:
     descriptor_target = reporter.descriptor_target()
-    reporter_name = descriptor_target.reporter_name()
-    supports_engine_specific_projection = reporter_name in {
-        'console',
-        'json',
-        'junit',
-    }
-    artifact_formats = ()
-    if reporter_name == 'json':
-        artifact_formats = ('json',)
-    elif reporter_name == 'junit':
-        artifact_formats = ('junit_xml',)
-
     return CxpComponentCapabilitySnapshot(
-        component_name=reporter_name,
+        component_name=descriptor_target.reporter_name(),
         component_kind='reporter',
         identity=ComponentIdentity(
             interface=COSECHA_REPORTER_INTERFACE,
-            provider=reporter_name,
+            provider=descriptor_target.reporter_name(),
             version=str(descriptor_target.reporter_api_version()),
         ),
-        capabilities=(
-            CxpCapabilityDescriptor(
-                name='report_lifecycle',
-                level='supported',
-                operations=(
-                    CxpCapabilityOperationBinding('reporter.start'),
-                    CxpCapabilityOperationBinding('reporter.print_report'),
-                ),
-            ),
-            CxpCapabilityDescriptor(
-                name='result_projection',
-                level='supported',
-                operations=(
-                    CxpCapabilityOperationBinding('reporter.add_test'),
-                    CxpCapabilityOperationBinding('reporter.add_test_result'),
-                ),
-                metadata={
-                    'supports_engine_specific_projection': (
-                        supports_engine_specific_projection
-                    ),
-                },
-            ),
-            CxpCapabilityDescriptor(
-                name='artifact_output',
-                level='supported',
-                operations=(
-                    CxpCapabilityOperationBinding('reporter.print_report'),
-                ),
-                metadata={
-                    'output_kind': descriptor_target.reporter_output_kind(),
-                    'artifact_formats': list(artifact_formats),
-                    'supports_engine_specific_projection': (
-                        supports_engine_specific_projection
-                    ),
-                },
-            ),
+        capabilities=_passthrough_cxp_capabilities(
+            descriptor_target.describe_capabilities(),
         ),
     )
 
@@ -259,7 +302,6 @@ def build_cxp_reporter_component_snapshot(
 def build_cxp_plugin_component_snapshot(
     plugin: Plugin,
 ) -> CxpComponentCapabilitySnapshot:
-    plugin_name = plugin.plugin_name()
     capabilities = [
         CxpCapabilityDescriptor(
             name='plugin_lifecycle',
@@ -287,119 +329,156 @@ def build_cxp_plugin_component_snapshot(
         ),
     ]
 
-    if 'coverage' in plugin_name.lower():
+    for descriptor in plugin.describe_capabilities():
+        if descriptor.name not in {'timing_summary', 'telemetry_export'}:
+            continue
         capabilities.append(
             CxpCapabilityDescriptor(
-                name='coverage_summary',
-                level='supported',
-                metadata={'output_formats': ['term', 'term-missing']},
-            ),
-        )
-    if 'timing' in plugin_name.lower():
-        capabilities.append(
-            CxpCapabilityDescriptor(
-                name='timing_summary',
-                level='supported',
-                metadata={'output_formats': ['console_summary']},
-            ),
-        )
-    if 'telemetry' in plugin_name.lower():
-        capabilities.append(
-            CxpCapabilityDescriptor(
-                name='telemetry_export',
-                level='supported',
-                metadata={'output_formats': ['jsonl']},
+                name=descriptor.name,
+                level=descriptor.level,
+                summary=descriptor.summary,
+                operations=_cxp_operations(descriptor.operations),
+                metadata=_attributes_metadata(descriptor),
             ),
         )
 
     return CxpComponentCapabilitySnapshot(
-        component_name=plugin_name,
+        component_name=plugin.plugin_name(),
         component_kind='plugin',
         identity=ComponentIdentity(
             interface=COSECHA_PLUGIN_INTERFACE,
-            provider=plugin_name,
+            provider=plugin.plugin_name(),
             version=str(plugin.plugin_api_version()),
         ),
         capabilities=tuple(capabilities),
     )
 
 
-def _build_definition_knowledge_descriptor(
-    descriptors: tuple[CapabilityDescriptor, ...],
-) -> CxpCapabilityDescriptor | None:
-    knowledge_descriptors = tuple(
-        descriptor
-        for descriptor in descriptors
-        if descriptor.name
-        in (
-            _PROJECT_DEFINITION_KNOWLEDGE,
-            _LIBRARY_DEFINITION_KNOWLEDGE,
-            _PROJECT_REGISTRY_KNOWLEDGE,
-        )
+def _build_definition_descriptor(
+    *,
+    descriptor: CapabilityDescriptor,
+    name: str,
+    origin_kind: str,
+    default_scopes: tuple[str, ...],
+    allowed_operations: set[str],
+) -> CxpCapabilityDescriptor:
+    operations = tuple(
+        binding
+        for binding in _cxp_operations(descriptor.operations)
+        if binding.operation_name in allowed_operations
     )
-    if not knowledge_descriptors:
-        return None
-
-    origin_kinds: list[str] = []
-    scopes: list[str] = []
-    operations: list[CxpCapabilityOperationBinding] = []
-    supports_fresh_resolution = False
-    supports_kb_projection = False
-
-    for descriptor in knowledge_descriptors:
-        if descriptor.name == _PROJECT_DEFINITION_KNOWLEDGE:
-            origin_kinds.append('project_definitions')
-            scopes.append('project')
-        elif descriptor.name == _LIBRARY_DEFINITION_KNOWLEDGE:
-            origin_kinds.append('library_definitions')
-            scopes.append('library')
-        elif descriptor.name == _PROJECT_REGISTRY_KNOWLEDGE:
-            origin_kinds.append('project_registry')
-            scopes.append('project')
-
-        for operation in descriptor.operations:
-            operations.append(
-                CxpCapabilityOperationBinding(
-                    operation_type_to_name(operation.operation_type),
-                    result_type=operation.result_type,
-                    freshness=operation.freshness,
-                ),
-            )
-            if operation.freshness == 'fresh':
-                supports_fresh_resolution = True
-            if operation.freshness == 'knowledge_base':
-                supports_kb_projection = True
-
-    normalized_operations = tuple(
-        dict.fromkeys(
-            operation
-            for operation in operations
-            if operation.operation_name
-            in {
-                'definition.resolve',
-                'knowledge.query_tests',
-                'knowledge.query_definitions',
-                'knowledge.query_registry_items',
-            }
-        ),
+    supports_fresh_resolution = any(
+        operation.freshness == 'fresh'
+        for operation in descriptor.operations
+    )
+    supports_knowledge_base_projection = any(
+        operation.freshness == 'knowledge_base'
+        for operation in descriptor.operations
     )
     return CxpCapabilityDescriptor(
-        name='definition_knowledge',
-        level='supported',
-        operations=normalized_operations,
+        name=name,
+        level=descriptor.level,
+        summary=descriptor.summary,
+        operations=operations,
         metadata={
-            'knowledge_origin_kinds': list(dict.fromkeys(origin_kinds)),
-            'knowledge_scopes': list(dict.fromkeys(scopes)),
+            'knowledge_origin_kind': [origin_kind],
+            'knowledge_scopes': list(
+                _attribute_value(
+                    descriptor,
+                    'knowledge_scopes',
+                    default_scopes,
+                ),
+            ),
             'supports_fresh_resolution': supports_fresh_resolution,
-            'supports_knowledge_base_projection': supports_kb_projection,
+            'supports_knowledge_base_projection': (
+                supports_knowledge_base_projection
+            ),
         },
     )
 
 
+def _build_registry_descriptor(
+    *,
+    descriptor: CapabilityDescriptor,
+) -> CxpCapabilityDescriptor:
+    operations = tuple(
+        binding
+        for binding in _cxp_operations(descriptor.operations)
+        if binding.operation_name == 'knowledge.query_registry_items'
+    )
+    supports_knowledge_base_projection = any(
+        operation.freshness == 'knowledge_base'
+        for operation in descriptor.operations
+    )
+    return CxpCapabilityDescriptor(
+        name='project_registry_knowledge',
+        level=descriptor.level,
+        summary=descriptor.summary,
+        operations=operations,
+        metadata={
+            'registry_scopes': list(
+                _attribute_value(
+                    descriptor,
+                    'registry_scopes',
+                    ('project',),
+                ),
+            ),
+            'supports_knowledge_base_projection': (
+                supports_knowledge_base_projection
+            ),
+        },
+    )
+
+
+def _passthrough_cxp_capabilities(
+    descriptors: tuple[CapabilityDescriptor, ...],
+    *,
+    excluded_names: set[str] | None = None,
+) -> tuple[CxpCapabilityDescriptor, ...]:
+    blocked = excluded_names or set()
+    capabilities: list[CxpCapabilityDescriptor] = []
+    for descriptor in descriptors:
+        if descriptor.name in blocked:
+            continue
+        metadata = _attributes_metadata(descriptor)
+        if descriptor.delivery_mode is not None:
+            metadata.setdefault('delivery_mode', descriptor.delivery_mode)
+        if descriptor.granularity is not None:
+            metadata.setdefault('granularity', descriptor.granularity)
+        capabilities.append(
+            CxpCapabilityDescriptor(
+                name=descriptor.name,
+                level=descriptor.level,
+                summary=descriptor.summary,
+                operations=_cxp_operations(descriptor.operations),
+                metadata=metadata,
+            ),
+        )
+    return tuple(capabilities)
+
+
+def _attributes_metadata(
+    descriptor: CapabilityDescriptor,
+) -> dict[str, object]:
+    return {
+        attribute.name: _normalize_attribute_value(attribute.value)
+        for attribute in descriptor.attributes
+    }
+
+
+def _normalize_attribute_value(value: object) -> object:
+    if isinstance(value, tuple):
+        return [
+            _normalize_attribute_value(item)
+            for item in value
+        ]
+    return value
+
+
 def _find_descriptor(
-    descriptors: Iterable[CapabilityDescriptor],
+    descriptors: tuple[CapabilityDescriptor, ...],
     name: str,
-):
+) -> CapabilityDescriptor | None:
     for descriptor in descriptors:
         if descriptor.name == name:
             return descriptor
@@ -407,46 +486,46 @@ def _find_descriptor(
 
 
 def _attribute_value(
-    descriptor,
+    descriptor: CapabilityDescriptor,
     name: str,
-    default,
-):
+    default: object,
+) -> object:
     for attribute in descriptor.attributes:
         if attribute.name == name:
             return attribute.value
     return default
 
 
+def _filtered_cxp_operations(
+    operations,
+    allowed_names: set[str],
+) -> tuple[CxpCapabilityOperationBinding, ...]:
+    return tuple(
+        binding
+        for binding in _cxp_operations(operations)
+        if binding.operation_name in allowed_names
+    )
+
+
 def _cxp_operations(
     operations,
 ) -> tuple[CxpCapabilityOperationBinding, ...]:
     return tuple(
-        CxpCapabilityOperationBinding(
-            operation_type_to_name(operation.operation_type),
-            result_type=operation.result_type,
-            freshness=operation.freshness,
-        )
-        for operation in operations
+        dict.fromkeys(
+            CxpCapabilityOperationBinding(
+                operation.operation_type,
+                result_type=operation.result_type,
+                freshness=operation.freshness,
+            )
+            for operation in operations
+        ),
     )
-
-
-def _filtered_cxp_operations(
-    operations,
-    allowed_operation_names: set[str],
-) -> tuple[CxpCapabilityOperationBinding, ...]:
-    return tuple(
-        operation
-        for operation in _cxp_operations(operations)
-        if operation.operation_name in allowed_operation_names
-    )
-
-
-def operation_type_to_name(operation_type: str) -> str:
-    return operation_type
 
 
 __all__ = (
     'build_cxp_engine_component_snapshot',
+    'build_cxp_instrumentation_component_snapshot',
     'build_cxp_plugin_component_snapshot',
     'build_cxp_reporter_component_snapshot',
+    'build_cxp_runtime_component_snapshot',
 )

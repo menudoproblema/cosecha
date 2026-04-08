@@ -26,3 +26,18 @@ Reglas:
 - menos trabajo repetido en collection y validación reactiva,
 - mejor soporte para explain y tooling,
 - necesidad de versionado e invalidación explícitos del snapshot.
+
+## Nota de evolucion
+
+Este ADR fija la direccion, pero no es ya la unica autoridad del
+contrato.
+
+- La identidad operativa del workspace y la invalidacion de artefactos
+  persistentes se apoyan hoy en `workspace_fingerprint`, tal y como
+  desarrolla ADR-0006.
+- El discovery estatico y las capabilities publicas que alimentan
+  planning, validacion y tooling se publican hoy a traves del catalogo
+  canonico de `cosecha`, formalizado en ADR-0010.
+- Este ADR debe leerse como decision fundacional de "knowledge primero";
+  los tipos, snapshots y reglas operativas concretas viven ya en los
+  ADR posteriores y en el codigo.

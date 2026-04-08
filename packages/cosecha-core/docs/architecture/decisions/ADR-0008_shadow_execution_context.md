@@ -2,7 +2,7 @@
 
 ## Estado
 
-Accepted
+Accepted, extendido por ADR-0009
 
 ## Contexto
 
@@ -125,3 +125,22 @@ efímero por sesión.
 La arquitectura queda preparada para evoluciones posteriores como
 `sitecustomize.py`, bootstrap de subprocesses Python o sandboxes
 externos sin renegociar de nuevo la semántica del storage efímero.
+
+## Nota de evolucion
+
+ADR-0009 extiende este ADR en tres puntos sustantivos:
+
+- el namespacing por componente dentro del shadow;
+- el transporte del shadow y de los permisos efimeros mediante
+  bootstrap;
+- el cleanup granular por namespace.
+
+La implementacion actual mantiene este ADR como autoridad sobre la
+existencia y ubicacion del shadow de sesion, pero el layout operativo
+vigente ya distingue:
+
+- instrumentacion bajo `shadow.instrumentation_dir / <component_id>`;
+- estado de runtime bajo `shadow.runtime_state_dir / <component_id>`.
+
+`shadow.coverage_dir` permanece como alias de compatibilidad hacia el
+namespace oficial de `cosecha.instrumentation.coverage`.

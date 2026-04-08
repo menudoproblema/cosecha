@@ -4,6 +4,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from cosecha.core.capabilities import (
+    CAPABILITY_REPORT_LIFECYCLE,
+    CAPABILITY_RESULT_PROJECTION,
+    CapabilityAttribute,
+    CapabilityDescriptor,
+    CapabilityOperationBinding,
+)
 from cosecha.core.event_bus import AsyncEventBus
 from cosecha.core.reporting_ir import TestReport
 
@@ -35,6 +42,41 @@ class Reporter(ABC):
     @classmethod
     def reporter_output_kind(cls) -> str:
         return 'other'
+
+    @classmethod
+    def describe_capabilities(cls) -> tuple[CapabilityDescriptor, ...]:
+        return (
+            CapabilityDescriptor(
+                name=CAPABILITY_REPORT_LIFECYCLE,
+                level='supported',
+                operations=(
+                    CapabilityOperationBinding(
+                        operation_type='reporter.start',
+                    ),
+                    CapabilityOperationBinding(
+                        operation_type='reporter.print_report',
+                    ),
+                ),
+            ),
+            CapabilityDescriptor(
+                name=CAPABILITY_RESULT_PROJECTION,
+                level='supported',
+                attributes=(
+                    CapabilityAttribute(
+                        name='supports_engine_specific_projection',
+                        value=False,
+                    ),
+                ),
+                operations=(
+                    CapabilityOperationBinding(
+                        operation_type='reporter.add_test',
+                    ),
+                    CapabilityOperationBinding(
+                        operation_type='reporter.add_test_result',
+                    ),
+                ),
+            ),
+        )
 
     def descriptor_target(self) -> Reporter:
         return self

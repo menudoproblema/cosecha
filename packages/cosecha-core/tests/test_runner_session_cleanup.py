@@ -8,6 +8,10 @@ import pytest
 
 from cosecha.core.engines.base import BaseContext, Engine
 from cosecha.core.hooks import Hook
+from cosecha.core.knowledge_base import (
+    ReadOnlyPersistentKnowledgeBase,
+    SessionArtifactQuery,
+)
 from cosecha.core.items import TestItem, TestResultStatus
 from cosecha.core.plugins.base import Plugin
 from cosecha.core.runner import Runner, capture_handler, root_logger
@@ -152,3 +156,17 @@ def test_runner_finishes_engine_and_hooks_when_engine_start_fails(
     assert hook.after_called is True
     assert tuple(root_logger.handlers) == original_handlers
     assert capture_handler not in root_logger.handlers
+
+    knowledge_base = ReadOnlyPersistentKnowledgeBase(runner._knowledge_base.db_path)
+    try:
+        artifacts = knowledge_base.query_session_artifacts(
+            SessionArtifactQuery(limit=1),
+        )
+    finally:
+        knowledge_base.close()
+
+    summary = artifacts[0].report_summary
+    assert summary is not None
+    assert dict(summary.status_counts)['pending'] == 0
+    assert dict(summary.status_counts)['error'] == 1
+    assert artifacts[0].has_failures is True

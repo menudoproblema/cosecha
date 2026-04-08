@@ -122,6 +122,15 @@ estructura más allá de serializarlo y devolverlo.
 Consecuencia: la evolución del payload de un engine no exige migración
 de schema siempre que siga siendo serializable.
 
+Nota normativa:
+
+- el envelope del evento sigue siendo tipado y estable;
+- `snapshot_kind`, `phase`, ids operativos y taxonomia del evento no son
+  opacos;
+- la opacidad se limita al payload especifico de engine para no fijar
+  demasiado pronto un schema comun que hoy los engines reales no
+  comparten.
+
 ## Consecuencias
 
 `PytestEngine` pasa a implementar el hook estándar y reproduce el

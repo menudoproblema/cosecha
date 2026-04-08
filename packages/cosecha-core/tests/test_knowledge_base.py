@@ -9,10 +9,12 @@ from cosecha.core.domain_event_stream import DomainEventStream
 from cosecha.core.domain_events import (
     DomainEventMetadata,
     KnowledgeIndexedEvent,
+    NodeScheduledEvent,
     SessionFinishedEvent,
     SessionStartedEvent,
     TestFinishedEvent as FinishedEvent,
     TestKnowledgeIndexedEvent as IndexedEvent,
+    TestStartedEvent as StartedEvent,
 )
 from cosecha.core.execution_ir import build_test_path_label
 from cosecha.core.knowledge_base import (
@@ -196,3 +198,76 @@ def test_persistent_knowledge_base_roundtrips_to_read_only_queries(
     assert tests[0].selection_labels == ('api',)
     assert definitions[0].descriptors[0].function_name == 'shared_fixture'
     read_only.close()
+
+
+def test_knowledge_base_reconciles_active_tests_when_session_finishes(
+    tmp_path: Path,
+) -> None:
+    knowledge_base = PersistentKnowledgeBase(tmp_path / '.cosecha' / 'kb.db')
+    stream = DomainEventStream()
+    stream.add_sink(KnowledgeBaseDomainEventSink(knowledge_base))
+    test_path = 'tests/demo.feature'
+
+    async def _emit() -> None:
+        await stream.emit(
+            SessionStartedEvent(
+                root_path=str(tmp_path),
+                concurrency=1,
+                metadata=_build_metadata('session-started'),
+            ),
+        )
+        await stream.emit(
+            IndexedEvent(
+                engine_name='gherkin',
+                file_path=test_path,
+                tests=(
+                    DescriptorKnowledge(
+                        stable_id='gherkin:demo',
+                        test_name='Escenario demo',
+                        file_path=test_path,
+                        source_line=3,
+                    ),
+                ),
+                discovery_mode='ast',
+                knowledge_version='1',
+                metadata=_build_metadata('test-knowledge'),
+            ),
+        )
+        await stream.emit(
+            NodeScheduledEvent(
+                node_id='gherkin:demo:0',
+                node_stable_id='gherkin:demo',
+                worker_slot=0,
+                max_attempts=1,
+                metadata=_build_metadata('node-scheduled'),
+            ),
+        )
+        await stream.emit(
+            StartedEvent(
+                node_id='gherkin:demo:0',
+                node_stable_id='gherkin:demo',
+                engine_name='gherkin',
+                test_name='Escenario demo',
+                test_path=test_path,
+                metadata=_build_metadata('test-started'),
+            ),
+        )
+        await stream.emit(
+            SessionFinishedEvent(
+                has_failures=True,
+                metadata=_build_metadata('session-finished'),
+            ),
+        )
+        await stream.close()
+
+    asyncio.run(_emit())
+
+    snapshot = knowledge_base.snapshot()
+    live_snapshot = knowledge_base.live_snapshot()
+
+    assert snapshot.tests[0].status == 'error'
+    assert snapshot.tests[0].failure_kind == 'runtime'
+    assert snapshot.tests[0].last_error_code == 'session_aborted'
+    assert snapshot.tests[0].finished_at is not None
+    assert live_snapshot.running_tests == ()
+    knowledge_base.close()

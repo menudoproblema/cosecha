@@ -76,3 +76,43 @@ def test_collect_accepts_multiple_paths_and_exclusions(tmp_path: Path) -> None:
         ignored_feature.relative_to(tmp_path)
         not in collector.collected_files
     )
+
+
+def test_find_test_files_returns_empty_for_missing_path(tmp_path: Path) -> None:
+    collector = DummyCollector()
+
+    assert asyncio.run(collector.find_test_files(tmp_path / 'missing.feature')) == []
+
+
+def test_collect_ignores_paths_outside_base_path(tmp_path: Path) -> None:
+    outside_root = tmp_path.parent / 'outside'
+    outside_root.mkdir(exist_ok=True)
+    outside_feature = outside_root / 'outside.feature'
+    outside_feature.write_text('Feature: outside', encoding='utf-8')
+
+    collector = DummyCollector()
+    collector.initialize(SimpleNamespace(root_path=tmp_path), tmp_path)
+
+    asyncio.run(collector.collect(outside_root))
+
+    assert collector.collected_files == set()
+    assert collector.collected_tests == ()
+
+
+class _NoneReturningCollector(DummyCollector):
+    async def load_tests_from_file(self, test_path: Path):
+        del test_path
+        return None
+
+
+def test_collect_tracks_failed_files_when_loader_returns_none(
+    tmp_path: Path,
+) -> None:
+    feature_file = tmp_path / 'broken.feature'
+    feature_file.write_text('Feature: broken', encoding='utf-8')
+    collector = _NoneReturningCollector()
+    collector.initialize(SimpleNamespace(root_path=tmp_path), tmp_path)
+
+    asyncio.run(collector.collect(tmp_path))
+
+    assert collector.failed_files == {feature_file.relative_to(tmp_path)}

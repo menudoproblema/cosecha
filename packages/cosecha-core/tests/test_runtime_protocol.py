@@ -7,6 +7,7 @@ from cosecha.core.domain_events import (
     DomainEventMetadata,
     LogChunkEvent,
     ResourceLifecycleEvent,
+    serialize_domain_event,
 )
 from cosecha.core.execution_ir import (
     ExecutionBootstrap,
@@ -22,8 +23,17 @@ from cosecha.core.runtime_protocol import (
     RuntimeEventResponse,
     RuntimeExecuteCommand,
     RuntimeExecuteResponse,
+    RuntimeSnapshotResourceTimingsCommand,
+    RuntimeSnapshotResourceTimingsResponse,
+    RuntimeShutdownCommand,
     RuntimeShutdownResponse,
+    RuntimeReadyResponse,
     build_runtime_protocol_error,
+    cast_resource_lifecycle_action,
+    cast_runtime_event_stream_kind,
+    cast_optional_int,
+    cast_optional_str,
+    deserialize_resource_lifecycle_event,
     deserialize_runtime_command,
     deserialize_runtime_response,
 )
@@ -231,3 +241,128 @@ def test_runtime_protocol_roundtrips_shutdown_and_typed_error_response(
     assert isinstance(restored_error, RuntimeErrorResponse)
     assert restored_error.error.code == 'worker_command_failed'
     assert restored_error.metadata.correlation_id == 'command-1'
+
+
+def test_runtime_protocol_roundtrips_shutdown_and_snapshot_commands() -> None:
+    snapshot = RuntimeSnapshotResourceTimingsCommand(
+        metadata=RuntimeEnvelopeMetadata(in_reply_to='request-1'),
+    )
+    shutdown = RuntimeShutdownCommand(
+        metadata=RuntimeEnvelopeMetadata(in_reply_to='request-2'),
+    )
+
+    restored_snapshot = deserialize_runtime_command(snapshot.to_dict())
+    restored_shutdown = deserialize_runtime_command(shutdown.to_dict())
+
+    assert isinstance(restored_snapshot, RuntimeSnapshotResourceTimingsCommand)
+    assert restored_snapshot.metadata.in_reply_to == 'request-1'
+    assert isinstance(restored_shutdown, RuntimeShutdownCommand)
+    assert restored_shutdown.metadata.in_reply_to == 'request-2'
+
+
+def test_runtime_protocol_roundtrips_snapshot_resource_timings_response() -> None:
+    response = RuntimeSnapshotResourceTimingsResponse(
+        resource_timings=(
+            ResourceTiming(
+                name='mongo',
+                scope='worker',
+                acquire_count=1,
+                acquire_duration=0.1,
+            ),
+        ),
+        metadata=RuntimeEnvelopeMetadata(session_id='session-1'),
+    )
+
+    restored = deserialize_runtime_response(response.to_dict())
+
+    assert isinstance(restored, RuntimeSnapshotResourceTimingsResponse)
+    assert restored.resource_timings[0].name == 'mongo'
+
+
+def test_runtime_protocol_rejects_unknown_command_and_response_type() -> None:
+    with pytest.raises(ValueError, match='Unknown worker command'):
+        deserialize_runtime_command(
+            {
+                'command': 'unknown',
+                'protocol_version': RUNTIME_PROTOCOL_VERSION,
+            },
+        )
+
+    with pytest.raises(ValueError, match='Unknown worker response type'):
+        deserialize_runtime_response(
+            {
+                'response_type': 'unknown',
+                'status': 'ok',
+                'protocol_version': RUNTIME_PROTOCOL_VERSION,
+            },
+        )
+
+
+def test_runtime_protocol_rejects_invalid_protocol_versions() -> None:
+    with pytest.raises(ValueError, match='Unsupported runtime protocol version'):
+        RuntimeBootstrapCommand(
+            bootstrap=ExecutionBootstrap(
+                config_snapshot=_build_config_snapshot(),
+                nodes=(_build_snapshot(),),
+            ),
+            protocol_version=RUNTIME_PROTOCOL_VERSION + 1,
+        )
+
+    with pytest.raises(ValueError, match='Unsupported runtime protocol version'):
+        deserialize_runtime_response(
+            {
+                'response_type': 'ready',
+                'status': 'ready',
+                'protocol_version': RUNTIME_PROTOCOL_VERSION + 1,
+                'metadata': {'event_id': 'meta-1'},
+            },
+        )
+
+
+def test_runtime_protocol_cast_and_resource_deserialize_guards() -> None:
+    assert cast_optional_str(None) is None
+    assert cast_optional_str(12) == '12'
+    assert cast_optional_int(None) is None
+    assert cast_optional_int('12') == 12
+    assert cast_resource_lifecycle_action('acquired') == 'acquired'
+    assert cast_runtime_event_stream_kind('domain') == 'domain'
+
+    with pytest.raises(ValueError, match='Invalid resource lifecycle action'):
+        cast_resource_lifecycle_action('broken')
+    with pytest.raises(ValueError, match='Invalid runtime event stream kind'):
+        cast_runtime_event_stream_kind('broken')
+    with pytest.raises(ValueError, match='Expected resource.lifecycle payload'):
+        deserialize_resource_lifecycle_event(
+            serialize_domain_event(
+                LogChunkEvent(
+                    message='x',
+                    level='info',
+                    logger_name='tests.runtime',
+                ),
+            ),
+        )
+
+
+def test_runtime_protocol_normalize_dict_guard() -> None:
+    with pytest.raises(ValueError, match='Expected dict payload'):
+        deserialize_runtime_response(
+            {
+                'response_type': 'error',
+                'status': 'error',
+                'protocol_version': RUNTIME_PROTOCOL_VERSION,
+                'error': 'not-a-dict',
+            },
+        )
+
+
+def test_runtime_protocol_deserialize_defaults_metadata_when_missing() -> None:
+    restored = deserialize_runtime_response(
+        {
+            'response_type': 'ready',
+            'status': 'ready',
+            'protocol_version': RUNTIME_PROTOCOL_VERSION,
+        },
+    )
+
+    assert isinstance(restored, RuntimeReadyResponse)
+    assert restored.metadata.correlation_id == restored.metadata.message_id

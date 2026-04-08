@@ -14,8 +14,10 @@ from cosecha.core.serialization import (
     encode_json_bytes,
     encode_json_text,
     encode_json_text_lossy,
+    from_builtins,
     from_builtins_dict,
     to_builtins_dict,
+    to_builtins_list,
 )
 
 
@@ -75,6 +77,13 @@ def test_decode_json_list_rejects_non_list_payload() -> None:
         decode_json_list('{\"not\": \"a list\"}')
 
 
+def test_decode_json_dict_and_list_reject_invalid_json() -> None:
+    with pytest.raises(ValueError, match='Expected JSON object payload'):
+        decode_json_dict('{broken')
+    with pytest.raises(ValueError, match='Expected JSON array payload'):
+        decode_json_list('{broken')
+
+
 def test_from_builtins_dict_rejects_invalid_payload() -> None:
     with pytest.raises(ValueError, match='Expected `int`, got `str`'):
         from_builtins_dict(
@@ -86,3 +95,15 @@ def test_from_builtins_dict_rejects_invalid_payload() -> None:
             },
             target_type=DescriptorKnowledge,
         )
+
+
+def test_to_builtins_helpers_reject_unexpected_shapes() -> None:
+    with pytest.raises(ValueError, match='Expected builtin dict payload'):
+        to_builtins_dict(['not-a-dict'])
+    with pytest.raises(ValueError, match='Expected builtin list payload'):
+        to_builtins_list({'not': 'a-list'})
+
+
+def test_from_builtins_rejects_invalid_payload() -> None:
+    with pytest.raises(ValueError, match='Expected `int`, got `str`'):
+        from_builtins(['one', 'two'], target_type=tuple[int, ...])

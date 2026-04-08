@@ -3,18 +3,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from cosecha.core.capabilities import CAPABILITY_PRODUCES_EPHEMERAL_ARTIFACTS
 from cosecha.core.serialization import from_builtins_dict, to_builtins_dict
 
 
 if TYPE_CHECKING:  # pragma: no cover
     from cosecha.core.capabilities import CapabilityDescriptor
     from cosecha.core.engines.base import Engine
+    from cosecha.core.instrumentation import InstrumentationComponent
     from cosecha.core.plugins.base import Plugin
     from cosecha.core.reporter import Reporter
     from cosecha.core.runtime import RuntimeProvider
 
 
-type ExtensionKind = Literal['engine', 'plugin', 'reporter', 'runtime']
+type ExtensionKind = Literal[
+    'engine',
+    'plugin',
+    'reporter',
+    'runtime',
+    'instrumentation',
+]
 type ExtensionStability = Literal['stable', 'experimental']
 type ExtensionCompatibilityValue = str | bool | int | tuple[str, ...]
 
@@ -22,6 +30,7 @@ ENGINE_EXTENSION_API_VERSION = 1
 PLUGIN_EXTENSION_API_VERSION = 1
 REPORTER_EXTENSION_API_VERSION = 1
 RUNTIME_EXTENSION_API_VERSION = 1
+INSTRUMENTATION_EXTENSION_API_VERSION = 1
 
 
 @dataclass(slots=True, frozen=True)
@@ -145,6 +154,7 @@ def build_runtime_extension_snapshot(
             implementation=_build_implementation_name(
                 runtime_provider.__class__,
             ),
+            cxp_interface='cosecha/runtime',
             published_capabilities=_capability_names(descriptors),
             compatibility=compatibility,
         ),
@@ -172,7 +182,32 @@ def build_reporter_extension_snapshot(
                 descriptor_reporter.__class__,
             ),
             cxp_interface='cosecha/reporter',
+            published_capabilities=_capability_names(
+                descriptor_reporter.describe_capabilities(),
+            ),
             compatibility=compatibility,
+        ),
+    )
+
+
+def build_instrumentation_extension_snapshot(
+    instrumentation_type: type[InstrumentationComponent],
+    *,
+    descriptors: tuple[CapabilityDescriptor, ...],
+) -> ExtensionComponentSnapshot:
+    return ExtensionComponentSnapshot(
+        component_name=instrumentation_type.instrumentation_name(),
+        descriptor=ExtensionDescriptor(
+            canonical_name=instrumentation_type.instrumentation_name(),
+            extension_kind='instrumentation',
+            api_version=instrumentation_type.instrumentation_api_version(),
+            stability=instrumentation_type.instrumentation_stability(),
+            implementation=_build_implementation_name(instrumentation_type),
+            cxp_interface='cosecha/instrumentation',
+            published_capabilities=_capability_names(
+                descriptors,
+                excluded_names={CAPABILITY_PRODUCES_EPHEMERAL_ARTIFACTS},
+            ),
         ),
     )
 
@@ -209,8 +244,17 @@ def build_plugin_extension_snapshot(
 
 def _capability_names(
     descriptors: tuple[CapabilityDescriptor, ...],
+    *,
+    excluded_names: set[str] | None = None,
 ) -> tuple[str, ...]:
-    return tuple(sorted(descriptor.name for descriptor in descriptors))
+    blocked = excluded_names or set()
+    return tuple(
+        sorted(
+            descriptor.name
+            for descriptor in descriptors
+            if descriptor.name not in blocked
+        ),
+    )
 
 
 def _build_implementation_name(extension_type: type[object]) -> str:
