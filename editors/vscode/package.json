@@ -1,0 +1,280 @@
+{
+  "name": "cosecha-vscode",
+  "displayName": "Cosecha",
+  "description": "VS Code integration for Cosecha workspaces",
+  "version": "0.0.1",
+  "publisher": "cosecha",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Testing",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:gherkin",
+    "onLanguage:python",
+    "onView:cosechaQuickActions",
+    "onView:cosechaKnowledge",
+    "onView:cosechaSessions",
+    "onCommand:cosecha.showKnowledgeBaseInfo",
+    "onCommand:cosecha.selectPythonEnvironment",
+    "onCommand:cosecha.clearPythonEnvironment",
+    "onCommand:cosecha.showSessionArtifact",
+    "onCommand:cosecha.showSessionSummary",
+    "onCommand:cosecha.exportSessionArtifact",
+    "onCommand:cosecha.openSessionFile",
+    "onCommand:cosecha.rerunSessionScope",
+    "onCommand:cosecha.copySessionId",
+    "onCommand:cosecha.insertGherkinDataTable",
+    "onCommand:cosecha.refreshData",
+    "onCommand:cosecha.manifestValidate",
+    "onCommand:cosecha.showBackend",
+    "onCommand:cosecha.restartLanguageServer",
+    "onCommand:cosecha.run",
+    "onCommand:cosecha.planExplain",
+    "onCommand:cosecha.doctor",
+    "onCommand:cosecha.knowledgeRebuild",
+    "onCommand:cosecha.gherkinValidateCurrentFile",
+    "onCommand:cosecha.pytestValidateCurrentFile"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "gherkin",
+        "aliases": [
+          "Gherkin",
+          "Cosecha Gherkin"
+        ],
+        "extensions": [
+          ".feature"
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "cosecha.showBackend",
+        "title": "Cosecha: Show Backend"
+      },
+      {
+        "command": "cosecha.restartLanguageServer",
+        "title": "Cosecha: Restart Language Server"
+      },
+      {
+        "command": "cosecha.selectPythonEnvironment",
+        "title": "Cosecha: Select Virtualenv Folder"
+      },
+      {
+        "command": "cosecha.clearPythonEnvironment",
+        "title": "Cosecha: Clear Python Environment"
+      },
+      {
+        "command": "cosecha.showKnowledgeBaseInfo",
+        "title": "Cosecha: Show Knowledge Base"
+      },
+      {
+        "command": "cosecha.showSessionArtifact",
+        "title": "Cosecha: Show Session Artifact"
+      },
+      {
+        "command": "cosecha.showSessionSummary",
+        "title": "Cosecha: Show Session Summary"
+      },
+      {
+        "command": "cosecha.exportSessionArtifact",
+        "title": "Cosecha: Export Session Artifact"
+      },
+      {
+        "command": "cosecha.openSessionFile",
+        "title": "Cosecha: Open Session File"
+      },
+      {
+        "command": "cosecha.rerunSessionScope",
+        "title": "Cosecha: Rerun Session Scope"
+      },
+      {
+        "command": "cosecha.copySessionId",
+        "title": "Cosecha: Copy Session Id"
+      },
+      {
+        "command": "cosecha.insertGherkinDataTable",
+        "title": "Cosecha: Insert Gherkin Data Table"
+      },
+      {
+        "command": "cosecha.refreshData",
+        "title": "Cosecha: Refresh Views"
+      },
+      {
+        "command": "cosecha.manifestValidate",
+        "title": "Cosecha: Manifest Validate"
+      },
+      {
+        "command": "cosecha.run",
+        "title": "Cosecha: Run"
+      },
+      {
+        "command": "cosecha.planExplain",
+        "title": "Cosecha: Plan Explain"
+      },
+      {
+        "command": "cosecha.doctor",
+        "title": "Cosecha: Doctor"
+      },
+      {
+        "command": "cosecha.knowledgeRebuild",
+        "title": "Cosecha: Knowledge Rebuild"
+      },
+      {
+        "command": "cosecha.gherkinValidateCurrentFile",
+        "title": "Cosecha: Validate Current Gherkin File"
+      },
+      {
+        "command": "cosecha.pytestValidateCurrentFile",
+        "title": "Cosecha: Validate Current Pytest File"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cosecha",
+          "title": "Cosecha",
+          "icon": "media/cosecha.svg"
+        }
+      ]
+    },
+    "views": {
+      "cosecha": [
+        {
+          "id": "cosechaQuickActions",
+          "name": "Quick Actions"
+        },
+        {
+          "id": "cosechaKnowledge",
+          "name": "Knowledge Base"
+        },
+        {
+          "id": "cosechaSessions",
+          "name": "Recent Sessions"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "cosecha.refreshData",
+          "when": "view == cosechaQuickActions",
+          "group": "navigation"
+        },
+        {
+          "command": "cosecha.restartLanguageServer",
+          "when": "view == cosechaQuickActions",
+          "group": "navigation"
+        },
+        {
+          "command": "cosecha.selectPythonEnvironment",
+          "when": "view == cosechaQuickActions",
+          "group": "navigation"
+        },
+        {
+          "command": "cosecha.refreshData",
+          "when": "view == cosechaKnowledge",
+          "group": "navigation"
+        },
+        {
+          "command": "cosecha.refreshData",
+          "when": "view == cosechaSessions",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "cosecha.insertGherkinDataTable",
+          "when": "editorLangId == gherkin",
+          "group": "navigation"
+        },
+        {
+          "command": "cosecha.run",
+          "when": "editorLangId == gherkin || editorLangId == python",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "cosecha.showSessionSummary",
+          "when": "view == cosechaSessions && viewItem == sessionArtifact",
+          "group": "navigation"
+        },
+        {
+          "command": "cosecha.openSessionFile",
+          "when": "view == cosechaSessions && viewItem == sessionArtifact",
+          "group": "navigation@1"
+        },
+        {
+          "command": "cosecha.rerunSessionScope",
+          "when": "view == cosechaSessions && viewItem == sessionArtifact",
+          "group": "inline"
+        },
+        {
+          "command": "cosecha.copySessionId",
+          "when": "view == cosechaSessions && viewItem == sessionArtifact",
+          "group": "secondary"
+        },
+        {
+          "command": "cosecha.exportSessionArtifact",
+          "when": "view == cosechaSessions && viewItem == sessionArtifact",
+          "group": "secondary@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Cosecha",
+      "properties": {
+        "cosecha.enableLanguageServer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the Cosecha language server for .feature files."
+        },
+        "cosecha.pythonInterpreterPath": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Explicit Python interpreter path for Cosecha in this workspace. If empty, the extension falls back to auto-detection."
+        },
+        "cosecha.cliCommand": {
+          "type": "string",
+          "default": "uv run cosecha",
+          "description": "Base command used for Cosecha CLI actions executed in the integrated terminal."
+        },
+        "cosecha.lspCommand": {
+          "type": "array",
+          "default": [
+            "uv",
+            "run",
+            "cosecha-lsp"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Command and arguments used to start the Cosecha language server over stdio."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "lint": "tsc -p . --noEmit",
+    "test": "npm run compile && node --test out/*.test.js"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.24",
+    "@types/vscode": "^1.96.0",
+    "typescript": "^5.8.2"
+  }
+}
