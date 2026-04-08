@@ -362,7 +362,7 @@ def test_validate_manifest_accepts_valid_manifest_and_resolves_symbols() -> (
         iter_hook_descriptors=_iter_hook_descriptors,
     )
 
-    assert engine_calls == 1
+    assert engine_calls == 2
     assert hook_calls == 1
 
 

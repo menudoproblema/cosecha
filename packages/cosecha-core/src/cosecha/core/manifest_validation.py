@@ -55,6 +55,17 @@ def validate_manifest(  # noqa: PLR0912, PLR0915
             raise ManifestValidationError(msg)
         validate_registry_loader_patterns(engine)
         validate_engine_runtime_profile_interfaces(manifest, engine)
+        engine_descriptor = resolve_engine_descriptor(engine.type)
+        validate_engine_spec = getattr(
+            engine_descriptor,
+            'validate_engine_spec',
+            None,
+        )
+        if callable(validate_engine_spec):
+            validate_engine_spec(
+                engine,
+                manifest=manifest,
+            )
 
     for profile in manifest.runtime_profiles:
         if profile.worker_isolation not in {'strict', 'shared'}:

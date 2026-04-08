@@ -156,6 +156,33 @@ def test_validate_manifest_rejects_duplicate_runtime_interface_inside_profile() 
         )
 
 
+def test_validate_manifest_calls_engine_descriptor_validate_engine_spec() -> None:
+    validate_calls: list[tuple[str, str]] = []
+
+    class _DescriptorWithEngineValidation:
+        @staticmethod
+        def validate_resource_binding(*_args: object, **_kwargs: object) -> None:
+            return None
+
+        @staticmethod
+        def validate_engine_spec(engine, *, manifest) -> None:
+            validate_calls.append((engine.id, manifest.path))
+
+    manifest = CosechaManifest(
+        path='manifest.toml',
+        schema_version=1,
+        engines=(_base_engine(),),
+    )
+
+    validate_manifest(
+        manifest,
+        resolve_engine_descriptor=lambda _engine_type: _DescriptorWithEngineValidation,
+        iter_hook_descriptors=lambda: (),
+    )
+
+    assert validate_calls == [('pytest', 'manifest.toml')]
+
+
 @pytest.mark.parametrize(
     ('resource_kwargs', 'error_message'),
     (
