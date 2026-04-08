@@ -159,7 +159,6 @@ class CosechaLanguageServer(LanguageServer):
         finally:
             if self.read_only_knowledge_base is not None:
                 self.read_only_knowledge_base.close()
-            self.shutdown()
 
     def _open_read_only_knowledge_base(
         self,
@@ -790,7 +789,10 @@ def main() -> None:
         hooks, engines = setup_engines(config)
         logger.info(f'Config root path: {config.root_path}')
 
-        server.loop.run_until_complete(server.start(config, hooks, engines))
+        try:
+            server.loop.run_until_complete(server.start(config, hooks, engines))
+        finally:
+            server.shutdown()
 
 
 def resolve_workspace_root_path(start_path: Path | None = None) -> Path:
