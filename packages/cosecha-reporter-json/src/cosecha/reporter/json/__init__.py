@@ -7,6 +7,14 @@ import time
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
+from cosecha.core.capabilities import (
+    CAPABILITY_ARTIFACT_OUTPUT,
+    CAPABILITY_RESULT_PROJECTION,
+    CAPABILITY_STRUCTURED_OUTPUT,
+    CapabilityAttribute,
+    CapabilityDescriptor,
+    CapabilityOperationBinding,
+)
 from cosecha.core.items import TestResultStatus
 from cosecha.core.reporter import Reporter
 from cosecha.core.reporting_ir import ensure_test_report
@@ -45,6 +53,79 @@ class JsonReporter(Reporter):
     @classmethod
     def reporter_output_kind(cls) -> str:
         return 'structured'
+
+    @classmethod
+    def describe_capabilities(cls) -> tuple[CapabilityDescriptor, ...]:
+        return (
+            CapabilityDescriptor(
+                name='report_lifecycle',
+                level='supported',
+                operations=(
+                    CapabilityOperationBinding(
+                        operation_type='reporter.start',
+                    ),
+                    CapabilityOperationBinding(
+                        operation_type='reporter.print_report',
+                    ),
+                ),
+            ),
+            CapabilityDescriptor(
+                name=CAPABILITY_RESULT_PROJECTION,
+                level='supported',
+                attributes=(
+                    CapabilityAttribute(
+                        name='supports_engine_specific_projection',
+                        value=True,
+                    ),
+                ),
+                operations=(
+                    CapabilityOperationBinding(
+                        operation_type='reporter.add_test',
+                    ),
+                    CapabilityOperationBinding(
+                        operation_type='reporter.add_test_result',
+                    ),
+                ),
+            ),
+            CapabilityDescriptor(
+                name=CAPABILITY_ARTIFACT_OUTPUT,
+                level='supported',
+                attributes=(
+                    CapabilityAttribute(
+                        name='artifact_formats',
+                        value=('json',),
+                    ),
+                ),
+                operations=(
+                    CapabilityOperationBinding(
+                        operation_type='reporter.print_report',
+                    ),
+                ),
+            ),
+            CapabilityDescriptor(
+                name=CAPABILITY_STRUCTURED_OUTPUT,
+                level='supported',
+                attributes=(
+                    CapabilityAttribute(
+                        name='output_kind',
+                        value='structured',
+                    ),
+                    CapabilityAttribute(
+                        name='artifact_formats',
+                        value=('json',),
+                    ),
+                    CapabilityAttribute(
+                        name='supports_engine_specific_projection',
+                        value=True,
+                    ),
+                ),
+                operations=(
+                    CapabilityOperationBinding(
+                        operation_type='reporter.print_report',
+                    ),
+                ),
+            ),
+        )
 
     def __init__(self, output_path: Path):
         self.output_path = output_path

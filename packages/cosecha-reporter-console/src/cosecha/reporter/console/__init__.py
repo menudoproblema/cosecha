@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from cosecha.core.capabilities import (
+    CAPABILITY_HUMAN_OUTPUT,
+    CAPABILITY_RESULT_PROJECTION,
+    CapabilityAttribute,
+    CapabilityDescriptor,
+    CapabilityOperationBinding,
+)
 from cosecha.core.console_rendering import (
     CodeBlockComponent,
     ConsoleRenderComponent,
@@ -80,6 +87,60 @@ class ConsoleReporter(Reporter):
     @classmethod
     def reporter_output_kind(cls) -> str:
         return 'console'
+
+    @classmethod
+    def describe_capabilities(cls) -> tuple[CapabilityDescriptor, ...]:
+        return (
+            CapabilityDescriptor(
+                name='report_lifecycle',
+                level='supported',
+                operations=(
+                    CapabilityOperationBinding(
+                        operation_type='reporter.start',
+                    ),
+                    CapabilityOperationBinding(
+                        operation_type='reporter.print_report',
+                    ),
+                ),
+            ),
+            CapabilityDescriptor(
+                name=CAPABILITY_RESULT_PROJECTION,
+                level='supported',
+                attributes=(
+                    CapabilityAttribute(
+                        name='supports_engine_specific_projection',
+                        value=True,
+                    ),
+                ),
+                operations=(
+                    CapabilityOperationBinding(
+                        operation_type='reporter.add_test',
+                    ),
+                    CapabilityOperationBinding(
+                        operation_type='reporter.add_test_result',
+                    ),
+                ),
+            ),
+            CapabilityDescriptor(
+                name=CAPABILITY_HUMAN_OUTPUT,
+                level='supported',
+                attributes=(
+                    CapabilityAttribute(
+                        name='output_kind',
+                        value='console',
+                    ),
+                    CapabilityAttribute(
+                        name='supports_engine_specific_projection',
+                        value=True,
+                    ),
+                ),
+                operations=(
+                    CapabilityOperationBinding(
+                        operation_type='reporter.print_report',
+                    ),
+                ),
+            ),
+        )
 
     async def start(self) -> None:
         self._cases = {
