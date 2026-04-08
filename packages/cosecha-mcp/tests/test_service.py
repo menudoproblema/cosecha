@@ -7,14 +7,26 @@ import threading
 
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from cosecha.core.config import ConfigSnapshot
+from cosecha.core.instrumentation import (
+    COSECHA_COVERAGE_ACTIVE_ENV,
+    COSECHA_INSTRUMENTATION_METADATA_FILE_ENV,
+    COSECHA_RUNTIME_STATE_DIR_ENV,
+    COSECHA_SHADOW_ROOT_ENV,
+)
 from cosecha.core.knowledge_base import (
+    DefinitionKnowledge,
+    PlanKnowledge,
     PersistentKnowledgeBase,
+    ResourceKnowledge,
+    SessionKnowledge,
     TestKnowledge as CoreTestKnowledge,
 )
+from cosecha.core.registry_knowledge import RegistryKnowledgeSnapshot
 from cosecha.core.session_artifacts import (
     InstrumentationSummary,
     SessionArtifact,
@@ -60,23 +72,29 @@ def _run_async(coro):
     return payload['result']
 
 
-def _build_workspace(cosecha_workspace):
-    cosecha_workspace.write_project_file('tests/.cosecha/kb.db', '')
+def _build_workspace(tmp_path: Path):
+    project_path = tmp_path / 'project'
+    tests_root = project_path / 'tests'
+    knowledge_base_path = tests_root / '.cosecha' / 'kb.db'
+    knowledge_base_path.parent.mkdir(parents=True, exist_ok=True)
+    knowledge_base_path.write_text('', encoding='utf-8')
     workspace_paths = CosechaWorkspacePaths(
-        project_path=cosecha_workspace.project_path,
-        root_path=cosecha_workspace.project_path / 'tests',
+        project_path=project_path,
+        root_path=tests_root,
         manifest_path=None,
-        knowledge_base_path=(
-            cosecha_workspace.project_path / 'tests/.cosecha/kb.db'
+        knowledge_base_path=knowledge_base_path,
+    )
+    version_name = f'python{sys.version_info.major}.{sys.version_info.minor}'
+    return workspace_paths, SimpleNamespace(
+        project_path=project_path,
+        site_packages_path=(
+            project_path / '.venv' / 'lib' / version_name / 'site-packages'
         ),
     )
-    return workspace_paths, cosecha_workspace
 
 
-def test_service_discovers_workspace_import_paths(
-    cosecha_workspace,
-) -> None:
-    workspace, handle = _build_workspace(cosecha_workspace)
+def test_service_discovers_workspace_import_paths(tmp_path: Path) -> None:
+    workspace, handle = _build_workspace(tmp_path)
     project_site_packages = handle.site_packages_path
     sibling_src = workspace.project_path.parent / 'shared-lib' / 'src'
     project_site_packages.mkdir(parents=True)
@@ -94,10 +112,8 @@ def test_service_discovers_workspace_import_paths(
     assert sibling_src.resolve() in discovered_paths
 
 
-def test_service_prefers_matching_workspace_python(
-    cosecha_workspace,
-) -> None:
-    workspace, _handle = _build_workspace(cosecha_workspace)
+def test_service_prefers_matching_workspace_python(tmp_path: Path) -> None:
+    workspace, _handle = _build_workspace(tmp_path)
     candidate = workspace.project_path / '.venv' / 'bin' / 'python'
     candidate.parent.mkdir(parents=True)
     candidate.write_text('', encoding='utf-8')
@@ -120,9 +136,9 @@ def test_service_prefers_matching_workspace_python(
 
 
 def test_service_rejects_workspace_python_version_mismatch(
-    cosecha_workspace,
+    tmp_path: Path,
 ) -> None:
-    workspace, _handle = _build_workspace(cosecha_workspace)
+    workspace, _handle = _build_workspace(tmp_path)
     candidate = workspace.project_path / '.venv' / 'bin' / 'python'
     candidate.parent.mkdir(parents=True)
     candidate.write_text('', encoding='utf-8')
@@ -146,10 +162,10 @@ def test_service_rejects_workspace_python_version_mismatch(
 
 
 def test_build_workspace_subprocess_env_is_minimal_outside_monorepo(
-    cosecha_workspace,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace, _handle = _build_workspace(cosecha_workspace)
+    workspace, _handle = _build_workspace(tmp_path)
     monkeypatch.setenv('PYTHONPATH', '/existing/path')
 
     class TestableService(CosechaMcpService):
@@ -173,9 +189,9 @@ def test_build_workspace_subprocess_env_is_minimal_outside_monorepo(
 
 
 def test_build_workspace_subprocess_env_includes_repo_sources_in_monorepo_checkout(
-    cosecha_workspace,
+    tmp_path: Path,
 ) -> None:
-    workspace, _handle = _build_workspace(cosecha_workspace)
+    workspace, _handle = _build_workspace(tmp_path)
     service = CosechaMcpService()
 
     env = service._build_workspace_subprocess_env(
@@ -188,6 +204,66 @@ def test_build_workspace_subprocess_env_includes_repo_sources_in_monorepo_checko
         entry.endswith('/packages/cosecha-mcp/src')
         for entry in pythonpath_entries
     )
+
+
+def test_build_config_uses_workspace_and_execution_context_paths() -> None:
+    workspace = CosechaWorkspacePaths(
+        project_path=PROJECT_ROOT,
+        root_path=PROJECT_TESTS_ROOT,
+        manifest_path=None,
+        knowledge_base_path=PROJECT_KB_PATH,
+        workspace_root=PROJECT_ROOT,
+        knowledge_anchor=PROJECT_TESTS_ROOT,
+        execution_root=PROJECT_ROOT,
+        workspace_fingerprint='workspace-fingerprint',
+    )
+    service = CosechaMcpService()
+
+    config = service._build_config(workspace)
+
+    assert config.workspace is not None
+    assert config.execution_context is not None
+    assert config.root_path == PROJECT_TESTS_ROOT.resolve()
+    assert config.workspace_root_path == PROJECT_ROOT.resolve()
+    assert config.execution_root_path == PROJECT_ROOT.resolve()
+    assert config.knowledge_storage_root_path == PROJECT_KB_PATH.parent.resolve()
+    assert (
+        config.execution_context.workspace_fingerprint
+        == 'workspace-fingerprint'
+    )
+
+
+def test_build_workspace_subprocess_env_strips_inherited_shadow_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = CosechaWorkspacePaths(
+        project_path=PROJECT_ROOT,
+        root_path=PROJECT_TESTS_ROOT,
+        manifest_path=None,
+        knowledge_base_path=PROJECT_KB_PATH,
+    )
+    for key, value in (
+        (COSECHA_SHADOW_ROOT_ENV, '/tmp/shadow'),
+        (COSECHA_RUNTIME_STATE_DIR_ENV, '/tmp/runtime-state'),
+        (COSECHA_INSTRUMENTATION_METADATA_FILE_ENV, '/tmp/meta.json'),
+        (COSECHA_COVERAGE_ACTIVE_ENV, '1'),
+    ):
+        monkeypatch.setenv(key, value)
+
+    class TestableService(CosechaMcpService):
+        def _is_monorepo_checkout(self) -> bool:
+            return False
+
+    service = TestableService()
+    env = service._build_workspace_subprocess_env(
+        workspace,
+        python_executable=OTHER_PYTHON,
+    )
+
+    assert COSECHA_SHADOW_ROOT_ENV not in env
+    assert COSECHA_RUNTIME_STATE_DIR_ENV not in env
+    assert COSECHA_INSTRUMENTATION_METADATA_FILE_ENV not in env
+    assert COSECHA_COVERAGE_ACTIVE_ENV not in env
 
 
 def test_service_run_tests_requires_explicit_opt_in(
@@ -281,9 +357,9 @@ def test_service_compacts_large_event_payloads() -> None:
 
 
 def test_query_tests_reads_persistent_knowledge_without_subprocess(
-    cosecha_workspace,
+    tmp_path: Path,
 ) -> None:
-    workspace, _handle = _build_workspace(cosecha_workspace)
+    workspace, _handle = _build_workspace(tmp_path)
     fake_tests = (
         CoreTestKnowledge(
             node_id='node-1',
@@ -333,6 +409,225 @@ def test_query_tests_reads_persistent_knowledge_without_subprocess(
     assert payload['context']['source'] == 'persistent_knowledge_base'
     assert len(payload['tests']) == 1
 
+
+def test_describe_workspace_returns_resolved_workspace_payload() -> None:
+    workspace = CosechaWorkspacePaths(
+        project_path=PROJECT_ROOT,
+        root_path=PROJECT_TESTS_ROOT,
+        manifest_path=None,
+        knowledge_base_path=PROJECT_KB_PATH,
+    )
+
+    class TestableService(CosechaMcpService):
+        def _resolve_workspace(self, *, start_path: str | None = None):
+            del start_path
+            return workspace
+
+    assert TestableService().describe_workspace() == workspace.to_dict()
+
+
+def test_describe_knowledge_base_reads_snapshot_and_latest_artifact(
+    tmp_path: Path,
+) -> None:
+    project_path = tmp_path / 'project'
+    tests_root = project_path / 'tests'
+    knowledge_base_path = project_path / '.cosecha' / 'kb.db'
+    tests_root.mkdir(parents=True)
+    knowledge_base_path.parent.mkdir(parents=True)
+    knowledge_base_path.write_text('sqlite', encoding='utf-8')
+    workspace = CosechaWorkspacePaths(
+        project_path=project_path,
+        root_path=tests_root,
+        manifest_path=tests_root / 'cosecha.toml',
+        knowledge_base_path=knowledge_base_path,
+    )
+
+    class _Artifact:
+        def to_dict(self) -> dict[str, object]:
+            return {'session_id': 'session-1'}
+
+    class _Snapshot:
+        definitions = ('def-1',)
+        registry_snapshots = ('reg-1', 'reg-2')
+        resources = ('resource-1',)
+        tests = ('test-1', 'test-2')
+        session = SessionKnowledge(
+            root_path='/workspace/demo',
+            workspace_fingerprint='workspace-1',
+            concurrency=1,
+            session_id='session-1',
+            trace_id='trace-1',
+            started_at=10.0,
+        )
+        latest_plan = PlanKnowledge(
+            mode='strict',
+            executable=True,
+            node_count=2,
+            issue_count=0,
+            plan_id='plan-1',
+            correlation_id='corr-1',
+            session_id='session-1',
+            trace_id='trace-1',
+            analyzed_at=11.0,
+        )
+
+    class TestableService(CosechaMcpService):
+        def _resolve_workspace(self, *, start_path: str | None = None):
+            del start_path
+            return workspace
+
+        def _read_knowledge_base_file_metadata(self, db_path: Path):
+            assert db_path == knowledge_base_path
+            return {'schema_version': 15}
+
+        @contextmanager
+        def _open_readonly_knowledge_base(self, current_workspace):
+            assert current_workspace == workspace
+
+            class _FakeKnowledgeBase:
+                @staticmethod
+                def snapshot():
+                    return _Snapshot()
+
+                @staticmethod
+                def query_session_artifacts(_query):
+                    return (_Artifact(),)
+
+            yield _FakeKnowledgeBase()
+
+    payload = TestableService().describe_knowledge_base()
+
+    assert payload['exists'] is True
+    assert payload['schema_version'] == 15
+    assert payload['current_snapshot_counts'] == {
+        'definitions': 1,
+        'registry_snapshots': 2,
+        'resources': 1,
+        'tests': 2,
+    }
+    assert payload['latest_session']['session_id'] == 'session-1'
+    assert payload['latest_plan']['plan_id'] == 'plan-1'
+    assert payload['latest_session_artifact'] == {'session_id': 'session-1'}
+
+
+def test_search_catalog_filters_entries_and_rejects_empty_query(
+    tmp_path: Path,
+) -> None:
+    workspace = CosechaWorkspacePaths(
+        project_path=tmp_path / 'project',
+        root_path=tmp_path / 'project' / 'tests',
+        manifest_path=None,
+        knowledge_base_path=tmp_path / 'project' / '.cosecha' / 'kb.db',
+    )
+    definition = DefinitionKnowledge(
+        engine_name='gherkin',
+        file_path='steps/demo.py',
+        definition_count=1,
+        discovery_mode='ast',
+    )
+    resource = ResourceKnowledge(
+        name='database connection',
+        scope='session',
+    )
+    registry_snapshot = RegistryKnowledgeSnapshot(
+        engine_name='gherkin',
+        module_spec='tests.steps.demo',
+        package_hash='abc',
+        layout_key='gherkin',
+        loader_schema_version='v1',
+    )
+
+    class TestableService(CosechaMcpService):
+        def _resolve_workspace(self, *, start_path: str | None = None):
+            del start_path
+            return workspace
+
+        @contextmanager
+        def _open_readonly_knowledge_base(self, current_workspace):
+            assert current_workspace == workspace
+
+            class _FakeKnowledgeBase:
+                @staticmethod
+                def query_tests(_query):
+                    return (
+                        CoreTestKnowledge(
+                            node_id='node-1',
+                            node_stable_id='stable-1',
+                            engine_name='gherkin',
+                            test_name='Demo scenario',
+                            test_path='features/demo.feature',
+                            indexed_at=1.0,
+                        ),
+                    )
+
+                @staticmethod
+                def query_definitions(_query):
+                    return (definition,)
+
+                @staticmethod
+                def query_resources(_query):
+                    return (resource,)
+
+                @staticmethod
+                def query_registry_items(_query):
+                    return (registry_snapshot,)
+
+            yield _FakeKnowledgeBase()
+
+    service = TestableService()
+    payload = service.search_catalog('demo', limit=10)
+    kinds = {match['kind'] for match in payload['matches']}
+    assert kinds == {'definition', 'registry', 'test'}
+    assert payload['matches_total_count'] >= 3
+
+    with pytest.raises(ValueError, match='requires a non-empty query'):
+        service.search_catalog('   ')
+
+
+def test_parse_runner_subprocess_response_handles_error_cases() -> None:
+    service = CosechaMcpService()
+    workspace = CosechaWorkspacePaths(
+        project_path=PROJECT_ROOT,
+        root_path=PROJECT_TESTS_ROOT,
+        manifest_path=None,
+        knowledge_base_path=PROJECT_KB_PATH,
+    )
+
+    with pytest.raises(RuntimeError, match='worker process failed'):
+        service._parse_runner_subprocess_response(
+            workspace,
+            python_executable='/usr/bin/python3',
+            returncode=1,
+            stdout=b'{}',
+            stderr=b'boom',
+        )
+
+    with pytest.raises(RuntimeError, match='returned an empty payload'):
+        service._parse_runner_subprocess_response(
+            workspace,
+            python_executable='/usr/bin/python3',
+            returncode=0,
+            stdout=b'',
+            stderr=b'',
+        )
+
+    with pytest.raises(RuntimeError, match='returned invalid JSON'):
+        service._parse_runner_subprocess_response(
+            workspace,
+            python_executable='/usr/bin/python3',
+            returncode=0,
+            stdout=b'{',
+            stderr=b'',
+        )
+
+    with pytest.raises(RuntimeError, match='must be a JSON object'):
+        service._parse_runner_subprocess_response(
+            workspace,
+            python_executable='/usr/bin/python3',
+            returncode=0,
+            stdout=b'[]',
+            stderr=b'',
+        )
 
 def _build_session_artifact(
     *,

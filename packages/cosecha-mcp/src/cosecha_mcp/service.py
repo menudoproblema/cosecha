@@ -48,7 +48,9 @@ from cosecha.core.operations import (
 from cosecha.core.registry_knowledge import RegistryKnowledgeQuery
 from cosecha.core.runner import Runner
 from cosecha.core.runtime import LocalRuntimeProvider
+from cosecha.core.shadow import strip_shadow_environment
 from cosecha.core.utils import setup_engines
+from cosecha.workspace import EffectiveWorkspace, ExecutionContext, ImportEnvironment
 from cosecha_mcp.workspace import (
     CosechaWorkspacePaths,
     normalize_workspace_relative_paths,
@@ -820,9 +822,38 @@ class CosechaMcpService:
             knowledge_base.close()
 
     def _build_config(self, workspace: CosechaWorkspacePaths) -> Config:
+        workspace_root = (
+            workspace.workspace_root
+            if workspace.workspace_root is not None
+            else workspace.project_path
+        ).resolve()
+        knowledge_anchor = (
+            workspace.knowledge_anchor
+            if workspace.knowledge_anchor is not None
+            else workspace.root_path
+        ).resolve()
+        execution_root = (
+            workspace.execution_root
+            if workspace.execution_root is not None
+            else workspace_root
+        ).resolve()
+
+        effective_workspace = EffectiveWorkspace(
+            manifest_path=workspace.manifest_path,
+            workspace_root=workspace_root,
+            knowledge_anchor=knowledge_anchor,
+            import_environment=ImportEnvironment(),
+        )
+        execution_context = ExecutionContext(
+            execution_root=execution_root,
+            knowledge_storage_root=workspace.knowledge_base_path.parent.resolve(),
+            workspace_fingerprint=workspace.workspace_fingerprint,
+        )
         return Config(
             root_path=workspace.root_path,
             capture_log=False,
+            workspace=effective_workspace,
+            execution_context=execution_context,
         )
 
     def _build_runner(self, workspace: CosechaWorkspacePaths) -> Runner:
@@ -1546,7 +1577,7 @@ class CosechaMcpService:
         *,
         python_executable: str,
     ) -> dict[str, str]:
-        env = os.environ.copy()
+        env = strip_shadow_environment(os.environ.copy())
         pythonpath_entries = [
             str(path)
             for path in self._discover_workspace_source_paths(workspace)
