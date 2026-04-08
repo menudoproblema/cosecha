@@ -186,7 +186,7 @@ def test_timing_plugin_uses_namespace_package_convention() -> None:
 
 def test_runtime_dependency_policy_uses_exact_versions() -> None:
     package_expectations = {
-        "cosecha-core": {"cxp==2.0.0", "msgspec==0.20.0"},
+        "cosecha-core": {"cxp>=3.0.0", "msgspec==0.20.0"},
         "cosecha-engine-gherkin": {
             "gherkin-official==38.0.0",
             "parse==1.21.0",
@@ -220,7 +220,7 @@ def test_only_cosecha_core_depends_directly_on_cxp() -> None:
         )["project"]
         dependencies = set(project.get("dependencies", ()))
         if package_name == "cosecha-core":
-            assert "cxp==2.0.0" in dependencies
+            assert "cxp>=3.0.0" in dependencies
             continue
         assert not any(
             dependency == "cxp"

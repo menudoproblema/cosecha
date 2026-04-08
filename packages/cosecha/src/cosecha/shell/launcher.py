@@ -23,6 +23,13 @@ from cosecha.core.knowledge_base import (
     SessionArtifactQuery,
 )
 from cosecha.core.runtime_protocol import build_runtime_message_id
+from cosecha.core.shadow import (
+    acquire_shadow_handle,
+    binding_shadow,
+    build_ephemeral_artifact_capability,
+    component_id_from_component_type,
+    strip_shadow_environment,
+)
 from cosecha.core.shadow_execution import ShadowExecutionContext
 
 _SESSION_ARTIFACT_RETRY_ATTEMPTS = 3
@@ -200,68 +207,86 @@ def _bootstrap_coverage(argv: list[str]) -> int:
 
     stripped_argv = instrumenter.strip_bootstrap_options(argv)
     shadow_context = _build_launcher_shadow_context()
-    workdir = shadow_context.coverage_dir
+    component_id = component_id_from_component_type(type(instrumenter))
+    ephemeral_capability = build_ephemeral_artifact_capability(
+        type(instrumenter).describe_capabilities(),
+        declared_component_id=component_id,
+    )
+    if ephemeral_capability is None:
+        msg = (
+            'CoverageInstrumenter must declare '
+            'produces_ephemeral_artifacts to use launcher bootstrap.'
+        )
+        raise RuntimeError(msg)
     preserve_shadow = False
     try:
         metadata_path = shadow_context.metadata_file
-        contribution = instrumenter.prepare(workdir=workdir)
-        for relative_path, contents in contribution.workdir_files.items():
-            target_path = workdir / relative_path
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_text(contents, encoding='utf-8')
-        for warning in contribution.warnings:
-            _emit_coverage_warning(warning)
+        with binding_shadow(
+            shadow_context,
+            ephemeral_capabilities={
+                ephemeral_capability.component_id: ephemeral_capability,
+            },
+        ):
+            handle = acquire_shadow_handle(component_id)
+            workdir = handle.ephemeral_dir()
+            contribution = instrumenter.prepare(workdir=workdir)
+            for relative_path, contents in contribution.workdir_files.items():
+                target_path = workdir / relative_path
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.write_text(contents, encoding='utf-8')
+            for warning in contribution.warnings:
+                _emit_coverage_warning(warning)
 
-        env = os.environ.copy()
-        env.update(contribution.env)
-        env.update(shadow_context.env())
-        env[COSECHA_COVERAGE_ACTIVE_ENV] = '1'
-        env[COSECHA_INSTRUMENTATION_METADATA_FILE_ENV] = str(metadata_path)
-        command = [*contribution.argv_prefix, *stripped_argv]
-        completed = subprocess.run(  # noqa: S603
-            command,
-            check=False,
-            env=env,
-        )
-
-        metadata = _load_metadata(metadata_path)
-        if metadata is None:
-            preserve_shadow = True
-            _emit_coverage_warning(
-                'no session metadata was written; coverage was not persisted. '
-                f'Preserved shadow dir: {shadow_context.root_path}',
+            env = strip_shadow_environment(os.environ.copy())
+            env.update(contribution.env)
+            env.update(shadow_context.env())
+            env[COSECHA_COVERAGE_ACTIVE_ENV] = '1'
+            env[COSECHA_INSTRUMENTATION_METADATA_FILE_ENV] = str(metadata_path)
+            command = [*contribution.argv_prefix, *stripped_argv]
+            completed = subprocess.run(  # noqa: S603
+                command,
+                check=False,
+                env=env,
             )
-            return int(completed.returncode)
-        metadata_config_snapshot = _config_snapshot_from_metadata(metadata)
 
-        try:
-            summary = instrumenter.collect(workdir=workdir)
-            updated_artifact, warning = _update_session_artifact(
-                metadata,
-                summary=summary,
-            )
-            if updated_artifact is None and warning is not None:
+            metadata = _load_metadata(metadata_path)
+            if metadata is None:
+                preserve_shadow = True
                 _emit_coverage_warning(
-                    f'coverage was collected but not persisted ({warning}).',
-                    config_snapshot=metadata_config_snapshot,
+                    'no session metadata was written; coverage was not persisted. '
+                    f'Preserved shadow dir: {shadow_context.root_path}',
                 )
-                if metadata_config_snapshot is not None:
-                    _render_coverage_summary(
-                        summary,
+                return int(completed.returncode)
+            metadata_config_snapshot = _config_snapshot_from_metadata(metadata)
+
+            try:
+                summary = instrumenter.collect(workdir=workdir)
+                updated_artifact, warning = _update_session_artifact(
+                    metadata,
+                    summary=summary,
+                )
+                if updated_artifact is None and warning is not None:
+                    _emit_coverage_warning(
+                        f'coverage was collected but not persisted ({warning}).',
                         config_snapshot=metadata_config_snapshot,
                     )
-            if updated_artifact is not None:
-                _render_coverage_summary(
-                    summary,
-                    config_snapshot=updated_artifact.config_snapshot,
+                    if metadata_config_snapshot is not None:
+                        _render_coverage_summary(
+                            summary,
+                            config_snapshot=metadata_config_snapshot,
+                        )
+                if updated_artifact is not None:
+                    _render_coverage_summary(
+                        summary,
+                        config_snapshot=updated_artifact.config_snapshot,
+                    )
+            except Exception as error:
+                preserve_shadow = True
+                _emit_coverage_warning(
+                    'failed to collect coverage '
+                    f'({error}). Preserved shadow dir: {shadow_context.root_path}',
                 )
-        except Exception as error:
-            preserve_shadow = True
-            _emit_coverage_warning(
-                'failed to collect coverage '
-                f'({error}). Preserved shadow dir: {shadow_context.root_path}',
-            )
-        return int(completed.returncode)
+            return int(completed.returncode)
     finally:
         shadow_context.cleanup(preserve=preserve_shadow)
 

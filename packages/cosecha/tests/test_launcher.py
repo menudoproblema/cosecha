@@ -4,11 +4,13 @@ import json
 import sqlite3
 import sys
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from cosecha.core.config import ConfigSnapshot
+from cosecha.core.shadow import acquire_shadow_handle, get_active_shadow
 from cosecha.core.session_artifacts import (
     InstrumentationSummary,
     SessionArtifact,
@@ -18,6 +20,7 @@ from cosecha.core.session_artifacts import (
     SessionArtifactPersistencePolicy,
 )
 from cosecha.core.shadow_execution import ShadowExecutionContext
+from cosecha.instrumentation.coverage import CoverageInstrumenter
 from cosecha.shell.launcher import (
     _bootstrap_coverage,
     _render_coverage_summary,
@@ -37,6 +40,8 @@ def test_should_bootstrap_coverage_only_for_run_commands_with_cov(
 
     monkeypatch.setenv('COSECHA_COVERAGE_ACTIVE', '1')
     assert _should_bootstrap_coverage(['run', '--cov', 'src/demo']) is False
+
+
 def test_bootstrap_coverage_reexecutes_under_coverage(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -55,6 +60,19 @@ def test_bootstrap_coverage_reexecutes_under_coverage(
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr('cosecha.shell.launcher.subprocess.run', fake_run)
+    original_prepare = CoverageInstrumenter.prepare
+
+    def wrapped_prepare(self, *, workdir):
+        recorded['bound_shadow_root'] = get_active_shadow().root_path
+        recorded['bound_ephemeral_root'] = acquire_shadow_handle(
+            self.COSECHA_COMPONENT_ID,
+        ).ephemeral_root
+        return original_prepare(self, workdir=workdir)
+
+    monkeypatch.setattr(
+        'cosecha.instrumentation.coverage.CoverageInstrumenter.prepare',
+        wrapped_prepare,
+    )
     monkeypatch.setattr(
         'cosecha.shell.launcher._build_launcher_shadow_context',
         lambda: ShadowExecutionContext(root_path=tmp_path / 'shadow').materialize(),
@@ -124,10 +142,74 @@ def test_bootstrap_coverage_reexecutes_under_coverage(
     ]
     assert recorded['env']['COSECHA_COVERAGE_ACTIVE'] == '1'
     assert recorded['env']['COSECHA_SHADOW_ROOT'] == str(tmp_path / 'shadow')
+    assert recorded['bound_shadow_root'] == tmp_path / 'shadow'
+    assert recorded['bound_ephemeral_root'] == (
+        tmp_path
+        / 'shadow'
+        / 'instrumentation'
+        / 'cosecha.instrumentation.coverage'
+    )
     assert recorded['metadata']['session_id'] == 'session-1'
     assert recorded['summary'].instrumentation_name == 'coverage'
     assert recorded['config_snapshot'].output_mode == 'summary'
     assert recorded['rendered_summary'].instrumentation_name == 'coverage'
+
+
+def test_bootstrap_coverage_keeps_writes_inside_shadow_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    shadow_context = ShadowExecutionContext(
+        root_path=tmp_path / 'shadow',
+    ).materialize()
+
+    def fake_run(command, *, check, env):
+        del command, check
+        metadata_path = Path(env['COSECHA_INSTRUMENTATION_METADATA_FILE'])
+        metadata_path.write_text(
+            '{"knowledge_base_path": null, "session_id": "session-1"}',
+            encoding='utf-8',
+        )
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr('cosecha.shell.launcher.subprocess.run', fake_run)
+    monkeypatch.setattr(
+        'cosecha.shell.launcher._build_launcher_shadow_context',
+        lambda: shadow_context,
+    )
+    monkeypatch.setattr(
+        'cosecha.shell.launcher._update_session_artifact',
+        lambda metadata, *, summary: (None, None),
+    )
+    monkeypatch.setattr(
+        'cosecha.shell.launcher._render_coverage_summary',
+        lambda summary, *, config_snapshot: None,
+    )
+    monkeypatch.setattr(
+        'cosecha.shell.launcher.ShadowExecutionContext.cleanup',
+        lambda self, *, preserve: None,
+    )
+    monkeypatch.setattr(
+        'cosecha.instrumentation.coverage.CoverageInstrumenter.collect',
+        lambda self, *, workdir: SimpleNamespace(
+            instrumentation_name='coverage',
+            summary_kind='coverage.py',
+            payload={'total_coverage': 87.5},
+        ),
+    )
+
+    exit_code = _bootstrap_coverage(['run', '--cov', 'src/demo'])
+
+    assert exit_code == 0
+    files = sorted(
+        str(path.relative_to(shadow_context.root_path))
+        for path in shadow_context.root_path.rglob('*')
+        if path.is_file()
+    )
+    assert files == [
+        'instrumentation/cosecha.instrumentation.coverage/.cosecha.coveragerc',
+        'instrumentation/run-metadata.json',
+    ]
 
 
 def test_bootstrap_coverage_warns_when_summary_is_not_persisted(

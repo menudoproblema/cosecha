@@ -85,6 +85,35 @@ def test_runtime_profile_hook_specs_return_empty_when_symbol_is_not_callable(
     assert specs == ()
 
 
+def test_runtime_profile_hook_specs_coerces_iterable_interfaces_to_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = _ProfileStub(id='api')
+
+    class _ResolvedSymbol:
+        def resolve(self, *, root_path: Path):
+            del root_path
+            return lambda current_profile: [
+                f'{current_profile.id}.db',
+                f'{current_profile.id}.cache',
+            ]
+
+    monkeypatch.setattr(
+        'cosecha.shell.mochuelo_runtime.SymbolRef.parse',
+        lambda raw: _ResolvedSymbol(),
+    )
+
+    specs = MochueloRuntimeServiceHookDescriptor.build_runtime_profile_hook_specs(
+        profile,
+        engine_ids=('pytest',),
+    )
+
+    assert tuple(spec.config['interface'] for spec in specs) == (
+        'api.db',
+        'api.cache',
+    )
+
+
 def test_materialize_delegates_to_external_descriptor(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
