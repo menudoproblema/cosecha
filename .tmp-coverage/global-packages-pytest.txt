@@ -1,0 +1,86 @@
+........................................................................ [  6%]
+........................................................................ [ 12%]
+...................................................sss.................. [ 18%]
+........................................................................ [ 24%]
+.......................................................................F [ 31%]
+........................................................................ [ 37%]
+........................................................................ [ 43%]
+........................................................................ [ 49%]
+........................................................................ [ 56%]
+........................................................................ [ 62%]
+........................................................................ [ 68%]
+........................................................................ [ 74%]
+........................................................................ [ 80%]
+........................................................................ [ 87%]
+........................................................................ [ 93%]
+........................................................................ [ 99%]
+....                                                                     [100%]
+=================================== FAILURES ===================================
+___________ test_runtime_internal_worker_helpers_and_stream_branches ___________
+
+tmp_path = PosixPath('/private/tmp/pytest-of-uve/pytest-6/test_runtime_internal_worker_h0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11dee70e0>
+
+    @pytest.mark.asyncio
+    async def test_runtime_internal_worker_helpers_and_stream_branches(
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        manager = _OrphanedResourceManager()
+        manager._active_resources_by_worker[3] = {
+            ('mongo', 'worker', 'h1'): SimpleNamespace(
+                name='mongo',
+                scope='worker',
+                external_handle='h1',
+            ),
+        }
+        reaped = await manager.reap_worker(3)
+        assert reaped == ()
+    
+        state_path = tmp_path / 'worker-1.json'
+        state_path.write_text(
+            (
+                '{"active_resources":['
+                '{"name":1,"scope":"worker","external_handle":"h"},'
+                '{"name":"a","scope":1,"external_handle":"h"},'
+                '{"name":"a","scope":"worker","external_handle":1}'
+                '],'
+                '"pending_resources":['
+                '1,'
+                '{"name":"a","scope":1,"external_handle":"h"},'
+                '{"name":"a","scope":"worker","external_handle":1},'
+                '{"name":"ok","scope":"worker","external_handle":"h"}'
+                ']}'
+            ),
+            encoding='utf-8',
+        )
+        records = manager._load_worker_state_resources(state_path)
+        assert list(records) == [('ok', 'worker', 'h')]
+    
+        worker = _PersistentWorker.__new__(_PersistentWorker)
+        worker.worker_id = 1
+        worker.session_id = 'session-1'
+        worker.stdout = _Reader(
+            (
+                encode_json_bytes(_make_runtime_execute_response().to_dict()) + b'\n',
+                b'',
+            ),
+        )
+        worker._stderr_text = []
+        worker._ready_future = asyncio.get_running_loop().create_future()
+        worker._command_futures = {}
+        worker._live_activity_event = asyncio.Event()
+        worker._live_domain_events = []
+        worker._live_log_events = []
+        assert worker.has_live_activity() is False
+    
+        worker._live_activity_event.set()
+        worker._live_domain_events = [object()]
+>       worker._fail_pending_responses = lambda error: None
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: '_PersistentWorker' object attribute '_fail_pending_responses' is read-only
+
+packages/cosecha-core/tests/test_runtime_gap_internal.py:160: AttributeError
+=========================== short test summary info ============================
+FAILED packages/cosecha-core/tests/test_runtime_gap_internal.py::test_runtime_internal_worker_helpers_and_stream_branches
+1 failed, 1152 passed, 3 skipped in 9.62s

@@ -1,0 +1,7 @@
+Name                                                                         Stmts   Miss  Cover
+------------------------------------------------------------------------------------------------
+packages/cosecha-provider-mongodb/src/cosecha/provider/mongodb/__init__.py       2      0   100%
+packages/cosecha-provider-mongodb/src/cosecha/provider/mongodb/_version.py       2      0   100%
+packages/cosecha-provider-mongodb/src/cosecha/provider/mongodb/provider.py     447      0   100%
+------------------------------------------------------------------------------------------------
+TOTAL                                                                          451      0   100%

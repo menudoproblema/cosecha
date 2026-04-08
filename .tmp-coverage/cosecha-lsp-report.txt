@@ -1,0 +1,7 @@
+Name                                                 Stmts   Miss  Cover
+------------------------------------------------------------------------
+packages/cosecha-lsp/src/cosecha_lsp/__init__.py         2      0   100%
+packages/cosecha-lsp/src/cosecha_lsp/_version.py         1      0   100%
+packages/cosecha-lsp/src/cosecha_lsp/lsp_server.py     304      0   100%
+------------------------------------------------------------------------
+TOTAL                                                  307      0   100%

@@ -1,0 +1,17 @@
+package	stmts	miss	cover	pytest_status
+cosecha	1423	0	100%	0
+cosecha-core	10585	329	97%	0
+cosecha-engine-gherkin	3125	0	100%	0
+cosecha-engine-pytest	2661	0	100%	0
+cosecha-instrumentation-coverage	129	0	100%	0
+cosecha-lsp	307	0	100%	0
+cosecha-mcp	712	0	100%	0
+cosecha-plugin-timing	2	0	100%	0
+cosecha-provider-http	847	0	100%	0
+cosecha-provider-mongodb	451	0	100%	0
+cosecha-provider-ssl	183	0	100%	0
+cosecha-reporter-console	163	0	100%	0
+cosecha-reporter-json	71	0	100%	0
+cosecha-reporter-junit	132	0	100%	0
+cosecha-workspace	299	0	100%	0
+cosecha-workspace-python	57	0	100%	0

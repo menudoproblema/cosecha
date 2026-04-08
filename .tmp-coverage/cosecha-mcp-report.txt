@@ -1,0 +1,10 @@
+Name                                                Stmts   Miss  Cover
+-----------------------------------------------------------------------
+packages/cosecha-mcp/src/cosecha_mcp/__init__.py        2      0   100%
+packages/cosecha-mcp/src/cosecha_mcp/_version.py        2      0   100%
+packages/cosecha-mcp/src/cosecha_mcp/server.py         61      0   100%
+packages/cosecha-mcp/src/cosecha_mcp/service.py       560      0   100%
+packages/cosecha-mcp/src/cosecha_mcp/worker.py         38      0   100%
+packages/cosecha-mcp/src/cosecha_mcp/workspace.py      49      0   100%
+-----------------------------------------------------------------------
+TOTAL                                                 712      0   100%

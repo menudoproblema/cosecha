@@ -1,0 +1,12 @@
+Name                                                                                 Stmts   Miss  Cover
+--------------------------------------------------------------------------------------------------------
+packages/cosecha-engine-pytest/src/cosecha/engine/pytest/__init__.py                     4      0   100%
+packages/cosecha-engine-pytest/src/cosecha/engine/pytest/collector.py                 1531      0   100%
+packages/cosecha-engine-pytest/src/cosecha/engine/pytest/context.py                     27      0   100%
+packages/cosecha-engine-pytest/src/cosecha/engine/pytest/discovery.py                   20      0   100%
+packages/cosecha-engine-pytest/src/cosecha/engine/pytest/engine.py                     324      0   100%
+packages/cosecha-engine-pytest/src/cosecha/engine/pytest/items.py                      434      0   100%
+packages/cosecha-engine-pytest/src/cosecha/engine/pytest/resource_bridge_plugin.py     137      0   100%
+packages/cosecha-engine-pytest/src/cosecha/engine/pytest/runtime_adapter.py            184      0   100%
+--------------------------------------------------------------------------------------------------------
+TOTAL                                                                                 2661      0   100%

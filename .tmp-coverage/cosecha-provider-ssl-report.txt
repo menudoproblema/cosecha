@@ -1,0 +1,7 @@
+Name                                                                 Stmts   Miss  Cover
+----------------------------------------------------------------------------------------
+packages/cosecha-provider-ssl/src/cosecha/provider/ssl/__init__.py       2      0   100%
+packages/cosecha-provider-ssl/src/cosecha/provider/ssl/_version.py       2      0   100%
+packages/cosecha-provider-ssl/src/cosecha/provider/ssl/provider.py     179      0   100%
+----------------------------------------------------------------------------------------
+TOTAL                                                                  183      0   100%

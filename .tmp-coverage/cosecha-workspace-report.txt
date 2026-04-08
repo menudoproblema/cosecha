@@ -1,0 +1,8 @@
+Name                                                            Stmts   Miss  Cover
+-----------------------------------------------------------------------------------
+packages/cosecha-workspace/src/cosecha/workspace/__init__.py        3      0   100%
+packages/cosecha-workspace/src/cosecha/workspace/_version.py        1      0   100%
+packages/cosecha-workspace/src/cosecha/workspace/discovery.py     190      0   100%
+packages/cosecha-workspace/src/cosecha/workspace/models.py        105      0   100%
+-----------------------------------------------------------------------------------
+TOTAL                                                             299      0   100%
