@@ -4,6 +4,7 @@ import json
 import sqlite3
 import sys
 
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 from cosecha.core.knowledge_base import (
@@ -103,6 +104,22 @@ def filtered_session_artifacts(
     return artifacts
 
 
+def serialize_structured_value(value: object | None) -> object | None:
+    if value is None:
+        return None
+
+    if hasattr(value, 'to_dict'):
+        return value.to_dict()
+
+    if is_dataclass(value):
+        return asdict(value)
+
+    if hasattr(value, '__dict__'):
+        return value.__dict__
+
+    return value
+
+
 def read_kb_metadata(db_path: Path) -> dict[str, object]:
     if not db_path.exists():
         return {
@@ -139,6 +156,58 @@ def serialize_summary_counts(
     counts: tuple[tuple[str, int], ...],
 ) -> dict[str, int]:
     return dict(counts)
+
+
+def read_session_event_stats(
+    db_path: Path,
+    session_id: str | None,
+) -> dict[str, object]:
+    if session_id is None or not db_path.exists():
+        return {
+            'has_finished_event': False,
+            'has_node_or_test_activity': False,
+        }
+
+    connection = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
+    try:
+        rows = connection.execute(
+            '''
+            SELECT event_type, COUNT(*)
+            FROM domain_event_log
+            WHERE session_id = ?
+            GROUP BY event_type
+            ''',
+            (session_id,),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    counts = {
+        str(event_type): int(count)
+        for event_type, count in rows
+    }
+    return {
+        'has_finished_event': counts.get('session.finished', 0) > 0,
+        'has_node_or_test_activity': any(
+            event_type.startswith('node.')
+            or event_type.startswith('test.')
+            or event_type.startswith('step.')
+            for event_type in counts
+        ),
+    }
+
+
+def _normalize_terminal_status_counts(
+    status_counts: dict[str, int],
+) -> dict[str, int]:
+    pending_count = int(status_counts.get('pending', 0))
+    if pending_count <= 0:
+        return status_counts
+
+    normalized = dict(status_counts)
+    normalized['pending'] = 0
+    normalized['skipped'] = int(normalized.get('skipped', 0)) + pending_count
+    return normalized
 
 
 def serialize_engine_summary(engine_summary: object) -> dict[str, object]:
@@ -251,10 +320,69 @@ def serialize_session_summary(artifact: object) -> dict[str, object]:
     }
 
 
-def serialize_session_artifact(artifact: object) -> dict[str, object]:
+def normalize_terminal_session_artifact_payload(
+    payload: dict[str, object],
+    *,
+    db_path: Path,
+) -> dict[str, object]:
+    report_summary = payload.get('report_summary')
+    if not isinstance(report_summary, dict):
+        return payload
+
+    status_counts = report_summary.get('status_counts')
+    if not isinstance(status_counts, dict):
+        return payload
+    if int(status_counts.get('pending', 0)) <= 0:
+        return payload
+
+    session_stats = read_session_event_stats(
+        db_path,
+        getattr(payload, 'get', lambda _key, _default=None: None)(
+            'session_id',
+            None,
+        ),
+    )
+    if not bool(session_stats.get('has_finished_event')):
+        return payload
+    if bool(session_stats.get('has_node_or_test_activity')):
+        return payload
+
+    normalized_payload = dict(payload)
+    normalized_summary = dict(report_summary)
+    normalized_summary['status_counts'] = _normalize_terminal_status_counts(
+        status_counts,
+    )
+
+    engine_summaries = normalized_summary.get('engine_summaries')
+    if isinstance(engine_summaries, list):
+        normalized_engine_summaries: list[dict[str, object]] = []
+        for engine_summary in engine_summaries:
+            if not isinstance(engine_summary, dict):
+                normalized_engine_summaries.append(engine_summary)
+                continue
+            engine_status_counts = engine_summary.get('status_counts')
+            if not isinstance(engine_status_counts, dict):
+                normalized_engine_summaries.append(dict(engine_summary))
+                continue
+            normalized_engine_summary = dict(engine_summary)
+            normalized_engine_summary['status_counts'] = (
+                _normalize_terminal_status_counts(engine_status_counts)
+            )
+            normalized_engine_summaries.append(normalized_engine_summary)
+        normalized_summary['engine_summaries'] = normalized_engine_summaries
+
+    normalized_payload['report_summary'] = normalized_summary
+    return normalized_payload
+
+
+def serialize_session_artifact(
+    artifact: object,
+    *,
+    db_path: Path,
+) -> dict[str, object]:
     payload = artifact.to_dict()
     payload['report_summary'] = serialize_session_summary(artifact)
-    return payload
+    return normalize_terminal_session_artifact_payload(payload, db_path=db_path)
 
 
 def main() -> int:
@@ -301,17 +429,18 @@ def main() -> int:
                 'tests': len(snapshot.tests),
             }
             payload['latest_session'] = (
-                None if snapshot.session is None else snapshot.session.__dict__
+                serialize_structured_value(snapshot.session)
             )
             payload['latest_plan'] = (
-                None
-                if snapshot.latest_plan is None
-                else snapshot.latest_plan.__dict__
+                serialize_structured_value(snapshot.latest_plan)
             )
             payload['latest_session_artifact'] = (
                 None
                 if not latest_artifacts
-                else serialize_session_artifact(latest_artifacts[0])
+                else serialize_session_artifact(
+                    latest_artifacts[0],
+                    db_path=knowledge_base_path,
+                )
             )
 
         print(json.dumps(payload, ensure_ascii=False))
@@ -367,7 +496,10 @@ def main() -> int:
         if operation == 'list_recent_sessions':
             payload = {
                 'artifacts': [
-                    serialize_session_artifact(artifact)
+                    serialize_session_artifact(
+                        artifact,
+                        db_path=knowledge_base_path,
+                    )
                     for artifact in filtered_session_artifacts(
                         knowledge_base,
                         workspace,
@@ -382,7 +514,10 @@ def main() -> int:
         if operation == 'read_session_artifact':
             payload = {
                 'artifacts': [
-                    serialize_session_artifact(artifact)
+                    serialize_session_artifact(
+                        artifact,
+                        db_path=knowledge_base_path,
+                    )
                     for artifact in filtered_session_artifacts(
                         knowledge_base,
                         workspace,

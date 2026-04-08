@@ -45,6 +45,15 @@ class PassingTestItem(TestItem):
         return False
 
 
+class LabeledPassingTestItem(PassingTestItem):
+    def __init__(self, path, labels: tuple[str, ...]) -> None:
+        super().__init__(path)
+        self._labels = labels
+
+    def has_selection_label(self, name: str) -> bool:
+        return name in self._labels
+
+
 class TrackingEngine(Engine):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -170,3 +179,35 @@ def test_runner_finishes_engine_and_hooks_when_engine_start_fails(
     assert dict(summary.status_counts)['pending'] == 0
     assert dict(summary.status_counts)['error'] == 1
     assert artifacts[0].has_failures is True
+
+
+def test_runner_persists_unexecuted_selected_out_tests_as_skipped(
+    tmp_path: Path,
+) -> None:
+    feature_path = _write_feature(tmp_path, 'filtered.feature')
+    engine = TrackingEngine(
+        'dummy',
+        collector=ListCollector(
+            [LabeledPassingTestItem(feature_path, labels=('api',))],
+        ),
+        reporter=DummyReporter(),
+    )
+    runner = Runner(build_config(tmp_path), {'': engine})
+
+    has_failures = asyncio.run(runner.run(selection_labels=['cli']))
+
+    assert has_failures is False
+
+    knowledge_base = ReadOnlyPersistentKnowledgeBase(runner._knowledge_base.db_path)
+    try:
+        artifacts = knowledge_base.query_session_artifacts(
+            SessionArtifactQuery(limit=1),
+        )
+    finally:
+        knowledge_base.close()
+
+    summary = artifacts[0].report_summary
+    assert summary is not None
+    assert dict(summary.status_counts)['pending'] == 0
+    assert dict(summary.status_counts)['skipped'] == 1
+    assert artifacts[0].has_failures is False

@@ -1434,7 +1434,7 @@ async function probeLanguageServerCommand(
     return await new Promise((resolve) => {
         const child = spawn(executable, args, {
             cwd,
-            stdio: ['ignore', 'pipe', 'pipe'],
+            stdio: ['pipe', 'pipe', 'pipe'],
         });
         let settled = false;
         let stdout = '';
@@ -1547,7 +1547,7 @@ async function runCliCommand(
         + `(exit=${exitCode ?? 'unknown'})`,
     );
 
-    if (exitCode === 0) {
+    if (exitCode !== undefined) {
         invalidateBridgeCache(workspaceFolder.uri.fsPath);
         if (options.refreshAfterSuccess) {
             void vscode.commands.executeCommand(

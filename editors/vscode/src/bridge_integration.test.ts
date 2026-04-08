@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 
 
 const extensionRoot = path.resolve(__dirname, '..');
@@ -160,5 +161,44 @@ test(
         } finally {
             await fs.promises.rm(workspaceRoot, { recursive: true, force: true });
         }
+    },
+);
+
+test(
+    'bridge serializes slotted dataclasses without using __dict__',
+    { skip: !canRunBridge },
+    () => {
+        const probe = spawnSync(
+            pythonPath,
+            [
+                '-c',
+                [
+                    'import importlib.util, json',
+                    `spec = importlib.util.spec_from_file_location("cosecha_bridge", ${JSON.stringify(bridgeScriptPath)})`,
+                    'module = importlib.util.module_from_spec(spec)',
+                    'assert spec.loader is not None',
+                    'spec.loader.exec_module(module)',
+                    'from cosecha.core.knowledge_base import PlanKnowledge, SessionKnowledge',
+                    'session = SessionKnowledge(root_path=".", workspace_fingerprint="abc", concurrency=2, session_id="s1", trace_id="t1", started_at=1.5)',
+                    'plan = PlanKnowledge(mode="run", executable=True, node_count=3, issue_count=0, plan_id="p1", correlation_id="c1", session_id="s1", trace_id="t1", analyzed_at=2.5)',
+                    'payload = {"session": module.serialize_structured_value(session), "plan": module.serialize_structured_value(plan)}',
+                    'print(json.dumps(payload, sort_keys=True))',
+                ].join('; '),
+            ],
+            {
+                cwd: repoRoot,
+                encoding: 'utf8',
+            },
+        );
+
+        assert.equal(probe.status, 0, probe.stderr || probe.stdout);
+        const payload = JSON.parse(probe.stdout) as {
+            session: Record<string, unknown>;
+            plan: Record<string, unknown>;
+        };
+        assert.equal(payload.session.session_id, 's1');
+        assert.equal(payload.session.workspace_fingerprint, 'abc');
+        assert.equal(payload.plan.plan_id, 'p1');
+        assert.equal(payload.plan.node_count, 3);
     },
 );

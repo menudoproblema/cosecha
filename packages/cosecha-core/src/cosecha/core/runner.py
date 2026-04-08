@@ -2025,6 +2025,11 @@ class Runner:
                 status=TestResultStatus.SKIPPED,
                 message='Execution stopped after a previous failure',
             )
+        else:
+            self._reconcile_unfinished_collected_tests(
+                status=TestResultStatus.SKIPPED,
+                message='Collected test was not executed in this session',
+            )
 
         await self.telemetry_stream.flush()
         await self._domain_event_stream.emit(
