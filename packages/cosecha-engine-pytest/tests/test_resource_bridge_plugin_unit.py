@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -75,6 +76,38 @@ def test_merge_pytest_resource_bindings_deduplicates_and_filters() -> None:
         (other_engine,),
         (first, duplicate),
     ) == (first,)
+
+
+def test_discover_manifest_path_falls_back_to_cwd_when_root_has_no_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / 'repo'
+    cwd_path = tmp_path / 'cwd'
+    root_path.mkdir()
+    cwd_path.mkdir()
+    cwd_manifest = cwd_path / 'cosecha.toml'
+
+    def _fake_discover_cosecha_manifest(*, start_path: Path):
+        resolved_start = Path(start_path).resolve()
+        if resolved_start == root_path.resolve():
+            return None
+        if resolved_start == cwd_path.resolve():
+            return cwd_manifest
+        return None
+
+    monkeypatch.setattr(
+        resource_bridge_plugin,
+        'discover_cosecha_manifest',
+        _fake_discover_cosecha_manifest,
+    )
+    monkeypatch.chdir(cwd_path)
+
+    manifest_path = resource_bridge_plugin._discover_manifest_path(
+        SimpleNamespace(rootpath=root_path),
+    )
+
+    assert manifest_path == cwd_manifest
 
 
 def test_dynamic_fixture_plugin_returns_resource_from_bridge():

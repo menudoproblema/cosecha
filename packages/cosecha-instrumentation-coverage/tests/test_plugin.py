@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import coverage
 
+from cosecha.core.capabilities import CAPABILITY_PRODUCES_EPHEMERAL_ARTIFACTS
+from cosecha.instrumentation import coverage as coverage_module
 from cosecha.instrumentation.coverage import (
     CoverageInstrumenter,
     CoverageRequest,
@@ -83,6 +85,87 @@ def test_prepare_builds_coverage_run_prefix(tmp_path) -> None:
         '.cosecha.coveragerc'
     ]
     assert 'source =' in contribution.workdir_files['.cosecha.coveragerc']
+
+
+def test_instrumenter_contract_and_capabilities() -> None:
+    assert CoverageInstrumenter.instrumentation_name() == 'coverage'
+    assert CoverageInstrumenter.instrumentation_api_version() == 1
+    assert CoverageInstrumenter.instrumentation_stability() == 'stable'
+
+    capability_names = {
+        descriptor.name
+        for descriptor in CoverageInstrumenter.describe_capabilities()
+    }
+    assert 'instrumentation_bootstrap' in capability_names
+    assert CAPABILITY_PRODUCES_EPHEMERAL_ARTIFACTS in capability_names
+
+
+def test_from_argv_and_parse_none_when_cov_missing() -> None:
+    assert CoverageInstrumenter.from_argv(('run', '--path', 'tests')) is None
+    assert parse_coverage_request(('run', '--path', 'tests')) is None
+
+    instrumenter = CoverageInstrumenter.from_argv(
+        ('run', '--cov', 'src/demo'),
+    )
+    assert instrumenter is not None
+    assert instrumenter.request.source_targets == ('src/demo',)
+
+
+def test_strip_coverage_options_handles_equals_cov_report_form() -> None:
+    instrumenter = CoverageInstrumenter(
+        CoverageRequest(source_targets=('src/demo',)),
+    )
+
+    assert instrumenter.strip_bootstrap_options(
+        ['run', '--cov-report=term-missing', '--path', 'tests/unit'],
+    ) == ['run', '--path', 'tests/unit']
+
+
+def test_extract_option_values_ignores_truncated_option() -> None:
+    assert coverage_module._extract_option_values(
+        ('run', '--cov-report'),
+        '--cov-report',
+    ) == ()
+
+
+def test_prepare_warns_on_source_override_and_writes_rcfile_sections(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class _FakeCoverage:
+        def __init__(self, *, config_file) -> None:
+            assert config_file is True
+            self.config = type(
+                '_Config',
+                (),
+                {
+                    'branch': False,
+                    'concurrency': ('thread', 'greenlet'),
+                    'run_omit': ('*/.venv/*', '*/tmp/*'),
+                    'source': ('src/another',),
+                    'parallel': False,
+                },
+            )()
+
+    monkeypatch.setattr(
+        coverage_module,
+        '_coverage_module',
+        lambda: SimpleNamespace(Coverage=_FakeCoverage),
+    )
+
+    instrumenter = CoverageInstrumenter(
+        CoverageRequest(source_targets=('src/demo',)),
+    )
+    contribution = instrumenter.prepare(workdir=tmp_path)
+    rcfile_content = contribution.workdir_files['.cosecha.coveragerc']
+
+    assert (
+        'overriding configured coverage sources with --cov targets'
+        in contribution.warnings
+    )
+    assert 'concurrency = thread,greenlet' in rcfile_content
+    assert 'omit =' in rcfile_content
+    assert '    */.venv/*' in rcfile_content
 
 
 def test_collect_builds_instrumentation_summary_from_parallel_data(

@@ -106,6 +106,21 @@ def test_engine_build_live_snapshot_payload_matches_runtime_contract(
     }
 
 
+def test_engine_build_live_snapshot_payload_returns_none_without_definition(
+    tmp_path: Path,
+) -> None:
+    engine = PytestEngine('pytest', reporter=DummyReporter())
+    engine.initialize(build_config(tmp_path), '')
+    node = SimpleNamespace(
+        test=SimpleNamespace(
+            definition=None,
+            _build_pytest_nodeid=lambda: 'tests/test_demo.py::test_case',
+        ),
+    )
+
+    assert engine.build_live_snapshot_payload(node, 'call') is None
+
+
 def test_engine_start_test_handles_issue_paths(tmp_path: Path) -> None:
     engine = PytestEngine('pytest', reporter=DummyReporter())
     test_path = tmp_path / 'test_demo.py'

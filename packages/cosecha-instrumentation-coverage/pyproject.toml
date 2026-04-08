@@ -21,6 +21,9 @@ dev = [
 [tool.setuptools.dynamic]
 version = {attr = "cosecha.instrumentation.coverage._version.__version__"}
 
+[project.entry-points."cosecha.instrumentation"]
+coverage = "cosecha.instrumentation.coverage:CoverageInstrumenter"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 namespaces = true

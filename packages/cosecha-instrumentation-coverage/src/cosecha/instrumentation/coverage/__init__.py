@@ -7,6 +7,12 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from cosecha.core.capabilities import (
+    CAPABILITY_PRODUCES_EPHEMERAL_ARTIFACTS,
+    CapabilityAttribute,
+    CapabilityDescriptor,
+    CapabilityOperationBinding,
+)
 from cosecha.core.instrumentation import Contribution
 from cosecha.core.session_artifacts import (
     InstrumentationSummary,
@@ -19,6 +25,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from pathlib import Path
 
 
+COSECHA_COMPONENT_ID = 'cosecha.instrumentation.coverage'
+
+
 @dataclass(slots=True, frozen=True)
 class CoverageRequest:
     source_targets: tuple[str, ...]
@@ -28,9 +37,115 @@ class CoverageRequest:
 
 class CoverageInstrumenter:
     __slots__ = ('request',)
+    COSECHA_COMPONENT_ID = COSECHA_COMPONENT_ID
 
     def __init__(self, request: CoverageRequest) -> None:
         self.request = request
+
+    @classmethod
+    def instrumentation_name(cls) -> str:
+        return 'coverage'
+
+    @classmethod
+    def instrumentation_api_version(cls) -> int:
+        return 1
+
+    @classmethod
+    def instrumentation_stability(cls) -> str:
+        return 'stable'
+
+    @classmethod
+    def describe_capabilities(cls) -> tuple[CapabilityDescriptor, ...]:
+        return (
+            CapabilityDescriptor(
+                name='instrumentation_bootstrap',
+                level='supported',
+                summary='Prepare coverage bootstrap files and env for a child run.',
+                operations=(
+                    CapabilityOperationBinding(
+                        operation_type='instrumentation.prepare',
+                        result_type='instrumentation.contribution',
+                    ),
+                ),
+            ),
+            CapabilityDescriptor(
+                name='session_summary',
+                level='supported',
+                summary='Collect a coverage session summary after the child exits.',
+                attributes=(
+                    CapabilityAttribute(
+                        name='instrumentation_name',
+                        value='coverage',
+                    ),
+                    CapabilityAttribute(
+                        name='summary_kind',
+                        value='coverage.py',
+                    ),
+                    CapabilityAttribute(
+                        name='measurement_scope',
+                        value='controller_process',
+                    ),
+                ),
+                operations=(
+                    CapabilityOperationBinding(
+                        operation_type='instrumentation.collect',
+                        result_type='instrumentation.summary',
+                    ),
+                ),
+            ),
+            CapabilityDescriptor(
+                name='structured_summary',
+                level='supported',
+                summary='Expose a serializable coverage summary payload.',
+                attributes=(
+                    CapabilityAttribute(
+                        name='payload_formats',
+                        value=('json',),
+                    ),
+                    CapabilityAttribute(
+                        name='serializable',
+                        value=True,
+                    ),
+                ),
+                operations=(
+                    CapabilityOperationBinding(
+                        operation_type='instrumentation.collect',
+                        result_type='instrumentation.summary',
+                    ),
+                ),
+            ),
+            CapabilityDescriptor(
+                name=CAPABILITY_PRODUCES_EPHEMERAL_ARTIFACTS,
+                level='supported',
+                summary='Coverage writes ephemeral bootstrap and data files into the session shadow.',
+                attributes=(
+                    CapabilityAttribute(
+                        name='component_id',
+                        value=COSECHA_COMPONENT_ID,
+                    ),
+                    CapabilityAttribute(
+                        name='ephemeral_domain',
+                        value='instrumentation',
+                    ),
+                    CapabilityAttribute(
+                        name='produces_persistent',
+                        value=False,
+                    ),
+                    CapabilityAttribute(
+                        name='cleanup_on_success',
+                        value=True,
+                    ),
+                    CapabilityAttribute(
+                        name='preserve_on_failure',
+                        value=True,
+                    ),
+                    CapabilityAttribute(
+                        name='description',
+                        value='coverage bootstrap files and data artifacts',
+                    ),
+                ),
+            ),
+        )
 
     def strip_bootstrap_options(self, argv: Sequence[str]) -> list[str]:
         return _strip_coverage_options(argv)

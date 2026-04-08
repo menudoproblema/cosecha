@@ -136,6 +136,29 @@ def test_build_live_snapshot_payload_returns_phase_snapshot(
     }
 
 
+@pytest.mark.parametrize(
+    ('feature', 'scenario'),
+    (
+        (None, SimpleNamespace(name='Works', all_steps=())),
+        (SimpleNamespace(name='Demo'), None),
+    ),
+)
+def test_build_live_snapshot_payload_returns_none_without_feature_or_scenario(
+    tmp_path: Path,
+    feature,
+    scenario,
+) -> None:
+    engine = _build_engine(tmp_path)
+    test = SimpleNamespace(
+        feature=feature,
+        scenario=scenario,
+        path=(tmp_path / 'suite' / 'demo.feature').resolve(),
+    )
+    node = SimpleNamespace(test=test)
+
+    assert engine.build_live_snapshot_payload(node, 'setup') is None
+
+
 @pytest.mark.asyncio
 async def test_collect_refreshes_lazy_resolver_and_binds_resources(
     monkeypatch,
